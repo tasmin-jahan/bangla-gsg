@@ -1,0 +1,35 @@
+# Training config for BanglaGSG
+# Spec: BanglaFM_Model_Implementation_Spec.md §4-5
+
+# LR schedule: warmup + cosine decay
+warmup_ratio: 0.015            # 1.5% of total steps
+min_lr_ratio: 0.1              # decay to 10% of peak
+
+# Gradient
+max_grad_norm: 1.0
+accumulation_steps: 64         # effective batch ≈ 64 * batch_size * 2048 tokens
+
+# Stability
+z_loss_weight: 1.0e-4          # spec §6.2
+
+# Memory optimizations
+gradient_checkpointing: true   # spec §5.4
+compile_model: true            # spec §5.5 (torch.compile)
+
+# Checkpointing (spec §7)
+checkpoint_dir: checkpoints
+checkpoint_every: 2000
+keep_checkpoints: 3
+
+# Logging
+log_dir: logs
+run_name: default
+log_every: 10
+eval_every: 500
+grad_norm_monitor_steps: 300   # spec §4.7
+
+# Pad token
+pad_token_id: 0
+
+# Total steps (0 = compute from data)
+max_steps: 0

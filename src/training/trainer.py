@@ -1,0 +1,342 @@
+"""
+BanglaGSG Training Loop.
+
+Implements the full training loop:
+- BF16 autocast
+- Gradient accumulation
+- Z-loss: 1e-4 * logsumexp(logits).pow(2).mean()
+- Global gradient clipping across both param groups
+- Dual optimizer step order: muon → adamw → sched × 2 → zero_grad × 2
+- Per-group gradient norm logging (first 300 steps)
+- Gradient checkpointing
+- torch.compile support
+"""
+
+import math
+import time
+from dataclasses import dataclass, field
+from typing import Optional
+
+import yaml
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from src.model.optim import build_param_groups
+from src.training.checkpoint import save_checkpoint, load_checkpoint, manage_checkpoints
+from src.utils.logging import MetricLogger
+
+
+@dataclass
+class TrainerConfig:
+    """Training hyperparameters loaded from YAML."""
+    # Schedule
+    warmup_ratio: float = 0.015
+    min_lr_ratio: float = 0.1
+
+    # Gradient
+    max_grad_norm: float = 1.0
+    accumulation_steps: int = 64
+
+    # Stability
+    z_loss_weight: float = 1e-4
+
+    # Memory
+    gradient_checkpointing: bool = True
+    compile_model: bool = True
+
+    # Checkpointing
+    checkpoint_dir: str = "checkpoints"
+    checkpoint_every: int = 2000
+    keep_checkpoints: int = 3
+    log_dir: str = "logs"
+
+    # Run
+    run_name: str = "default"
+    max_steps: int = 0  # 0 = compute from data
+    log_every: int = 10
+    eval_every: int = 500
+    grad_norm_monitor_steps: int = 300
+
+    # Pad token
+    pad_token_id: int = 0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TrainerConfig":
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+    @classmethod
+    def from_yaml(cls, path: str) -> "TrainerConfig":
+        with open(path) as f:
+            return cls.from_dict(yaml.safe_load(f) or {})
+
+
+class Trainer:
+    """
+    Training loop for BanglaGSG with dual Muon + AdamW optimizers.
+    """
+
+    def __init__(
+        self,
+        model: nn.Module,
+        muon_optimizer: torch.optim.Optimizer,
+        adamw_optimizer: torch.optim.Optimizer,
+        muon_scheduler,
+        adamw_scheduler,
+        train_loader,
+        eval_loader=None,
+        config: TrainerConfig = None,
+        model_config=None,
+        device: str = "cuda",
+    ):
+        self.model = model
+        self.muon_optimizer = muon_optimizer
+        self.adamw_optimizer = adamw_optimizer
+        self.muon_scheduler = muon_scheduler
+        self.adamw_scheduler = adamw_scheduler
+        self.train_loader = train_loader
+        self.eval_loader = eval_loader
+        self.config = config or TrainerConfig()
+        self.model_config = model_config
+        self.device = device
+
+        # Get param lists for gradient clipping
+        self.muon_params, self.adamw_params = build_param_groups(model)
+
+        # Compute total steps
+        if self.config.max_steps > 0:
+            self.total_steps = self.config.max_steps
+        else:
+            # Estimate from dataloader
+            steps_per_epoch = len(train_loader) // self.config.accumulation_steps
+            self.total_steps = max(steps_per_epoch, 1)
+
+        self.warmup_steps = int(self.total_steps * self.config.warmup_ratio)
+
+        # Logging
+        self.logger = MetricLogger(self.config.log_dir, self.config.run_name)
+
+        # State
+        self.global_step = 0
+        self.tokens_seen = 0
+        self.best_val_ppl = float("inf")
+
+    def compute_loss(self, logits: torch.Tensor, targets: torch.Tensor) -> tuple:
+        """
+        Compute CE loss + z-loss.
+
+        Args:
+            logits: (B, T, V) raw logits.
+            targets: (B, T) target token IDs.
+
+        Returns:
+            (total_loss, ce_loss_value, z_loss_value)
+        """
+        B, T, V = logits.shape
+
+        ce_loss = F.cross_entropy(
+            logits.view(-1, V),
+            targets.view(-1),
+            ignore_index=self.config.pad_token_id,
+        )
+
+        # Z-loss: penalty on logit magnitude
+        z_loss = self.config.z_loss_weight * torch.logsumexp(logits, dim=-1).pow(2).mean()
+
+        total_loss = ce_loss + z_loss
+
+        return total_loss, ce_loss.item(), z_loss.item()
+
+    def compute_grad_norms(self) -> tuple:
+        """Compute per-group gradient norms for monitoring."""
+        muon_norm = torch.nn.utils.clip_grad_norm_(self.muon_params, float("inf")).item()
+        adamw_norm = torch.nn.utils.clip_grad_norm_(self.adamw_params, float("inf")).item()
+        return muon_norm, adamw_norm
+
+    @torch.no_grad()
+    def evaluate(self) -> float:
+        """Compute validation perplexity."""
+        if self.eval_loader is None:
+            return float("inf")
+
+        self.model.eval()
+        total_loss = 0.0
+        n_batches = 0
+
+        for batch in self.eval_loader:
+            input_ids = batch["input_ids"].to(self.device)
+            targets = input_ids[:, 1:].contiguous()
+            input_ids = input_ids[:, :-1].contiguous()
+
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                logits = self.model(input_ids)
+                loss, _, _ = self.compute_loss(logits, targets)
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        self.model.train()
+        avg_loss = total_loss / max(n_batches, 1)
+        return math.exp(min(avg_loss, 20))  # clamp to avoid overflow
+
+    def resume(self, path: Optional[str] = None):
+        """Resume training from a checkpoint."""
+        if path is None:
+            # Find latest checkpoint
+            ckpt_dir = self.config.checkpoint_dir
+            ckpts = sorted(
+                (p for p in __import__("pathlib").Path(ckpt_dir).glob("step_*.pt")),
+                key=lambda p: int(p.stem.split("_")[1]),
+            )
+            if not ckpts:
+                print("[Trainer] No checkpoints found, starting from scratch.")
+                return
+            path = str(ckpts[-1])
+
+        ckpt = load_checkpoint(
+            path, self.model,
+            self.muon_optimizer, self.adamw_optimizer,
+            self.muon_scheduler, self.adamw_scheduler,
+            device=self.device,
+        )
+        self.global_step = ckpt["step"]
+        self.tokens_seen = ckpt.get("tokens_seen", 0)
+        self.best_val_ppl = ckpt.get("val_perplexity", float("inf"))
+
+    def train(self):
+        """Run the full training loop."""
+        self.model.train()
+        accum = self.config.accumulation_steps
+        seq_len = self.model_config.seq_len if self.model_config else 2048
+
+        # Zero grads initially
+        self.muon_optimizer.zero_grad(set_to_none=True)
+        self.adamw_optimizer.zero_grad(set_to_none=True)
+
+        micro_step = 0
+        running_loss = 0.0
+        running_ce = 0.0
+        running_z = 0.0
+        step_start = time.time()
+
+        data_iter = iter(self.train_loader)
+
+        while self.global_step < self.total_steps:
+            # Get batch
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                data_iter = iter(self.train_loader)
+                batch = next(data_iter)
+
+            input_ids = batch["input_ids"].to(self.device)
+            targets = input_ids[:, 1:].contiguous()
+            input_ids = input_ids[:, :-1].contiguous()
+
+            # Forward + backward
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                logits = self.model(input_ids)
+                loss, ce_val, z_val = self.compute_loss(logits, targets)
+                loss = loss / accum  # scale for accumulation
+
+            loss.backward()
+
+            running_loss += loss.item() * accum
+            running_ce += ce_val
+            running_z += z_val
+            micro_step += 1
+            self.tokens_seen += input_ids.numel()
+
+            # Optimizer step at accumulation boundary
+            if micro_step % accum == 0:
+                self.global_step += 1
+
+                # Per-group gradient norm monitoring
+                muon_gnorm, adamw_gnorm = None, None
+                if self.global_step <= self.config.grad_norm_monitor_steps:
+                    muon_gnorm, adamw_gnorm = self.compute_grad_norms()
+
+                # Global gradient clipping across both groups
+                torch.nn.utils.clip_grad_norm_(
+                    list(self.muon_params) + list(self.adamw_params),
+                    max_norm=self.config.max_grad_norm,
+                )
+
+                # Step order
+                self.muon_optimizer.step()
+                self.adamw_optimizer.step()
+                self.muon_scheduler.step()
+                self.adamw_scheduler.step()
+                self.muon_optimizer.zero_grad(set_to_none=True)
+                self.adamw_optimizer.zero_grad(set_to_none=True)
+
+                # Logging
+                avg_loss = running_loss / accum
+                avg_ce = running_ce / accum
+                avg_z = running_z / accum
+
+                if self.global_step % self.config.log_every == 0:
+                    elapsed = time.time() - step_start
+                    tokens_per_sec = (accum * input_ids.numel()) / max(elapsed, 1e-6)
+
+                    lr_muon = self.muon_scheduler.get_last_lr()[0]
+                    lr_adamw = self.adamw_scheduler.get_last_lr()[0]
+
+                    self.logger.log_stdout(
+                        self.global_step, self.total_steps,
+                        avg_loss, lr_muon, lr_adamw,
+                        tokens_per_sec, muon_gnorm, adamw_gnorm,
+                    )
+
+                    self.logger.log({
+                        "step": self.global_step,
+                        "tokens_seen": self.tokens_seen,
+                        "loss": round(avg_loss, 5),
+                        "ce_loss": round(avg_ce, 5),
+                        "z_loss": round(avg_z, 7),
+                        "lr_muon": lr_muon,
+                        "lr_adamw": lr_adamw,
+                        "grad_norm_muon": muon_gnorm,
+                        "grad_norm_adamw": adamw_gnorm,
+                    })
+
+                running_loss = 0.0
+                running_ce = 0.0
+                running_z = 0.0
+                step_start = time.time()
+
+                # Evaluation
+                if self.eval_loader and self.global_step % self.config.eval_every == 0:
+                    val_ppl = self.evaluate()
+                    print(f"[Eval] step {self.global_step} | val_ppl={val_ppl:.2f}")
+
+                    if val_ppl < self.best_val_ppl:
+                        self.best_val_ppl = val_ppl
+                        best_path = f"{self.config.checkpoint_dir}/best.pt"
+                        save_checkpoint(
+                            best_path, self.model,
+                            self.muon_optimizer, self.adamw_optimizer,
+                            self.muon_scheduler, self.adamw_scheduler,
+                            self.global_step, self.tokens_seen,
+                            avg_loss, val_ppl,
+                            config=self.model_config.__dict__ if self.model_config else None,
+                        )
+
+                # Periodic checkpointing
+                if self.global_step % self.config.checkpoint_every == 0:
+                    ckpt_path = f"{self.config.checkpoint_dir}/step_{self.global_step:08d}.pt"
+                    save_checkpoint(
+                        ckpt_path, self.model,
+                        self.muon_optimizer, self.adamw_optimizer,
+                        self.muon_scheduler, self.adamw_scheduler,
+                        self.global_step, self.tokens_seen,
+                        avg_loss,
+                        config=self.model_config.__dict__ if self.model_config else None,
+                    )
+                    manage_checkpoints(
+                        self.config.checkpoint_dir,
+                        keep_last=self.config.keep_checkpoints,
+                        best_path=f"{self.config.checkpoint_dir}/best.pt",
+                    )
+
+        print(f"[Trainer] Training complete. {self.global_step} steps, {self.tokens_seen:,} tokens.")

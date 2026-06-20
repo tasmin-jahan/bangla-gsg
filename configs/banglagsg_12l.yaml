@@ -1,0 +1,53 @@
+# BanglaGSG-12L | GDN:SWA:GQA 1:1:1 Hybrid
+#
+# 12-layer heterogeneous architecture:
+#   GDN  — Gated DeltaNet  (linear-time recurrent, long-range memory)
+#   SWA  — Sliding Window Attention (local context, O(T·W))
+#   GQA  — Grouped Query Attention  (global context, full causal)
+
+d_model: 1024
+n_layers: 12
+n_heads: 16
+n_kv_heads: 4
+d_head: 64
+d_ff: 2560                    # floor(2/3 * 4 * 1024 / 256) * 256
+vocab_size: 48000             # divisible by 128
+seq_len: 2048                 # fixed throughout training
+dropout: 0.0
+bias: false
+
+# Layer pattern: 1:1:1 interleaved
+# G S A G S A G S A G S A
+layer_types:
+  - gdn
+  - swa
+  - gqa
+  - gdn
+  - swa
+  - gqa
+  - gdn
+  - swa
+  - gqa
+  - gdn
+  - swa
+  - gqa
+
+# GDN (Gated DeltaNet) — from flash-linear-attention
+gdn_num_heads: 4              # key_dim = num_heads * head_dim = 4 * 256 = 1024
+gdn_head_dim: 256             # per-head key dimension
+gdn_expand_v: 1.0             # value expansion (head_v_dim = head_dim * expand_v)
+gdn_use_short_conv: true      # short causal conv before gating
+gdn_conv_size: 4              # short-conv kernel width
+
+# SWA (Sliding Window Attention) — via flash-attn window_size
+swa_window_size: 512          # one-sided window (512 tokens left)
+
+# RoPE (SWA + GQA layers only; GDN encodes position implicitly)
+rope_base: 10000.0
+rms_norm_eps: 1.0e-5
+
+# Stability
+qk_norm: true                 # per-head RMSNorm on Q/K before RoPE (SWA + GQA)
+
+# Weight tying (saves ~49M params)
+tie_embeddings: true

@@ -1,0 +1,139 @@
+# ═══════════════════════════════════════════════════════════════
+#  BanglaGSG — .gitignore
+#  GDN:SWA:GQA 1:1:1 Hybrid Bangla Foundation Model
+# ═══════════════════════════════════════════════════════════════
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+.eggs/
+
+# ── Virtual Environments ─────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.venv
+.python-version
+
+# ── IDE & Editors ────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+.spyderproject
+.spyproject
+.ropeproject
+no_upload/
+
+# ── OS Artifacts ─────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── Private / Sensitive ─────────────────────────────────────
+donotupload/
+secrets/
+*.env
+.env.*
+credentials.*
+data/
+
+# ── Saved Artifacts (data, models, tokenizers, checkpoints) ─
+saved/
+
+# ── Data Files (anywhere in tree) ────────────────────────────
+*.jsonl
+*.jsonl.gz
+*.npy
+*.npz
+*.bin
+*.memmap
+*.arrow
+*.parquet
+*.csv
+*.tsv
+!configs/*.yaml
+!configs/*.yml
+
+# ── Model Checkpoints ───────────────────────────────────────
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+checkpoint-*/
+
+# ── Tokenizer Artifacts ─────────────────────────────────────
+*.model
+*.vocab
+*.spm
+sentencepiece.bpe.model
+
+# ── FastText / Language ID ───────────────────────────────────
+lid.176.bin
+lid.176.ftz
+*.ftz
+
+# ── PDF Downloads (parliament scraper, etc.) ─────────────────
+*.pdf
+
+# ── ML Experiment Tracking ───────────────────────────────────
+wandb/
+runs/
+mlruns/
+lightning_logs/
+outputs/
+logs/
+*.tfevents*
+events.out.*
+
+# ── CUDA / Build Artifacts ───────────────────────────────────
+*.o
+*.cu.o
+*.cubin
+*.fatbin
+cuda-keyring*.deb
+
+# ── Jupyter ──────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Testing ──────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# ── Misc ─────────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+*.orig
+*.gz
+*.tar
+*.tar.gz
+*.zip
+!setup_venv.sh
