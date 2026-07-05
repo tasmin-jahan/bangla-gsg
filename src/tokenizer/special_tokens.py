@@ -23,8 +23,8 @@ from typing import Dict, List
 
 PAD_TOKEN = "<pad>"          # ID 0  — padding, attention mask = 0
 UNK_TOKEN = "<unk>"          # ID 1  — unknown (rare with byte_fallback)
-BOS_TOKEN = "<bos>"          # ID 2  — beginning of sequence / document
-EOS_TOKEN = "<eos>"          # ID 3  — end of sequence / document separator
+BOS_TOKEN = "<s>"            # ID 2  — beginning of sequence / document
+EOS_TOKEN = "</s>"           # ID 3  — end of sequence / document separator
 
 
 # ── ChatML / instruction format (IDs 4–10) ──────────────────────────────────
@@ -152,7 +152,7 @@ assert NUM_SPECIAL_TOKENS == 146, (
 
 VOCAB_SIZE = 48_000                         # total vocabulary
 LEARNED_SUBWORDS = VOCAB_SIZE - NUM_SPECIAL_TOKENS   # 47,854
-CHARACTER_COVERAGE = 0.9999
+CHARACTER_COVERAGE = 1.0
 MODEL_TYPE = "unigram"                      # SentencePiece model type
 BYTE_FALLBACK = True
 
