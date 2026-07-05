@@ -1,218 +1,205 @@
-#!/usr/bin/env python3
 """
-BanglaGSG — Pretokenization & Sequence Packing
-==================================================
+Pretokenize & Pack — per source type.
 
-Converts the full corpus to pretokenized uint16 binary .npy shards.
-Sequence-packs documents into 2048-token sequences with <eos> separators.
-Prepends language control tokens per document.
+Tokenizes every document, packs into 2048-token sequences, writes .npy shards.
+Output directories:
+  saved/data/pretokenized/bangla/train/
+  saved/data/pretokenized/english/train/
+  saved/data/pretokenized/nmt/train/
+  saved/data/pretokenized/sangraha/train/
 
-Input:  saved/data/cleaned/corpus_decontaminated.jsonl (+ banglish)
-Output: saved/pretokenized/*.npy  (consumed by src/data/dataset.py)
+No language token injection — tokens are already in text from downloaders.
+No eval split — everything goes to train.
 
 Usage:
   python scripts/pretokenize_and_pack.py
-  python scripts/pretokenize_and_pack.py --tokenizer-dir saved/tokenizer/hf
-
-Reference: BanglaFM_Q1_Data_Plan.md Part 5
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-import numpy as np
 from pathlib import Path
 
-DEFAULT_CORPUS = "saved/data/cleaned/corpus_decontaminated.jsonl"
-DEFAULT_BANGLISH = "saved/data/banglish/synthetic_banglish.jsonl"
-DEFAULT_TOKENIZER_DIR = "saved/tokenizer/hf"
-DEFAULT_OUTPUT_DIR = "saved/pretokenized"
-DEFAULT_SEQ_LEN = 2048
-DEFAULT_CHUNK_SIZE = 100_000  # sequences per shard
+import numpy as np
+import pyarrow.parquet as pq
+from tqdm import tqdm
 
-# ── Language token mapping ───────────────────────────────────────────────────
 
-LANG_TOKEN_MAP = {
-    "EN":                    "<|lang_en|>",
-    "ENGLISH":               "<|lang_en|>",
-    "BD":                    "<|lang_bn|>",
-    "BD_WB_MIX":             "<|lang_bn|>",
-    "BD_BANGLISH":           "<|lang_bnls|>",
-    "BD_BANGLISH_SYNTHETIC": "<|lang_bnls|>",
-    "CODE":                  "<|lang_code|>",
-    "PYTHON":                "<|lang_code|>",
+DATA_DIR = Path("saved/data")
+HF_TOKENIZER_DIR = Path("saved/tokenizer/hf")
+PRETOKENIZED_DIR = Path("saved/data/pretokenized")
+
+SEQ_LEN = 2048
+BATCH_TOKENS = SEQ_LEN * 100_000  # 204.8M tokens per shard
+
+# Source type → input directory + output directory
+SOURCE_CONFIGS = {
+    "bangla": {
+        "input_dir": DATA_DIR / "bangla_corpus",
+        "output": PRETOKENIZED_DIR / "bangla" / "train",
+    },
+    "english": {
+        "input_dir": DATA_DIR / "fineweb_edu",
+        "output": PRETOKENIZED_DIR / "english" / "train",
+    },
+    "nmt": {
+        "input_dir": DATA_DIR / "nllb_nmt",
+        "output": PRETOKENIZED_DIR / "nmt" / "train",
+    },
+    "sangraha": {
+        "input_dir": DATA_DIR / "sangraha",
+        "output": PRETOKENIZED_DIR / "sangraha" / "train",
+    },
 }
 
 
-def get_lang_token(language_region: str) -> str:
-    """Map language_region metadata to a language control token."""
-    lr = language_region.upper().strip()
-    if lr in LANG_TOKEN_MAP:
-        return LANG_TOKEN_MAP[lr]
-    if "BANGLISH" in lr or "BNLS" in lr:
-        return "<|lang_bnls|>"
-    if "MIX" in lr:
-        return "<|lang_mix|>"
-    if "CODE" in lr:
-        return "<|lang_code|>"
-    if "EN" in lr:
-        return "<|lang_en|>"
-    return "<|lang_bn|>"
+def load_tokenizer():
+    from transformers import PreTrainedTokenizerFast
+
+    for t_dir in [HF_TOKENIZER_DIR, Path("saved/tokenizer")]:
+        if t_dir.exists():
+            return PreTrainedTokenizerFast.from_pretrained(str(t_dir))
+
+    print(f"[pretokenize] ERROR: HF tokenizer not found at {HF_TOKENIZER_DIR} or saved/tokenizer")
+    sys.exit(1)
 
 
-def pack_sequences(token_stream: list[int], seq_len: int) -> np.ndarray:
-    """Pack a flat token stream into (N, seq_len) uint16 array."""
-    n = (len(token_stream) // seq_len) * seq_len
-    if n == 0:
-        return np.array([], dtype=np.uint16).reshape(0, seq_len)
-    return np.array(token_stream[:n], dtype=np.uint16).reshape(-1, seq_len)
+def save_shard(token_ids: list[int], shard_idx: int, output_dir: Path) -> int:
+    usable = len(token_ids) - (len(token_ids) % SEQ_LEN)
+    if usable == 0:
+        return 0
+    arr = np.array(token_ids[:usable], dtype=np.uint16).reshape(-1, SEQ_LEN)
+    shard_path = output_dir / f"shard_{shard_idx:05d}.npy"
+    tmp_path = shard_path.with_suffix(".npy.tmp")
+    np.save(tmp_path, arr)
+    tmp_path.replace(shard_path)
+    return arr.shape[0]
 
 
-def run_pretokenization(
-    corpus_files: list[str],
-    tokenizer_dir: str,
-    output_dir: str,
-    seq_len: int,
-    chunk_size: int,
-) -> None:
-    """Pretokenize corpus and write packed .npy shards."""
-    try:
-        from transformers import PreTrainedTokenizerFast
-    except ImportError:
-        print("ERROR: transformers not installed. Run: pip install transformers")
-        sys.exit(1)
+def _count_rows(path: Path) -> int:
+    return pq.read_metadata(path).num_rows
 
-    out_path = Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
 
-    # Load tokenizer
-    tok_path = Path(tokenizer_dir)
-    if not tok_path.exists():
-        print(f"ERROR: Tokenizer not found at {tokenizer_dir}")
-        print("  Train one first: python -m src.tokenizer.train_tokenizer --input ...")
-        sys.exit(1)
+def _resolve_inputs(config: dict) -> list[Path]:
+    """Return existing parquet files in the input directory."""
+    input_dir = config["input_dir"]
+    if not input_dir.exists():
+        return []
+    return sorted(input_dir.glob("*.parquet"))
 
-    tokenizer = PreTrainedTokenizerFast.from_pretrained(str(tok_path))
+
+def pretokenize_source(
+    source_type: str,
+    config: dict,
+    tokenizer,
+) -> tuple[int, int]:
+    """Pretokenize one source type. Returns (tokens_written, docs_processed)."""
+    output_dir = config["output"]
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    inputs = _resolve_inputs(config)
+    if not inputs:
+        print(f"[pretokenize] WARNING: No input files for {source_type}, skipping")
+        return 0, 0
+
+    # Count total rows
+    total_rows = sum(_count_rows(p) for p in inputs)
+
     eos_id = tokenizer.eos_token_id
-    assert eos_id is not None, "Tokenizer must have an EOS token"
-
-    print(f"{'=' * 60}")
-    print(f"  Pretokenization & Sequence Packing")
-    print(f"{'=' * 60}")
-    print(f"  Tokenizer:  {tokenizer_dir} (vocab={tokenizer.vocab_size})")
-    print(f"  Seq len:    {seq_len}")
-    print(f"  Chunk size: {chunk_size:,} sequences/shard")
-    print(f"  EOS ID:     {eos_id}")
-    print(f"  Output:     {output_dir}")
-    print()
-
+    buffer = []
     shard_idx = 0
-    token_buffer: list[int] = []
     total_tokens = 0
     total_docs = 0
 
-    for corpus_file in corpus_files:
-        fpath = Path(corpus_file)
-        if not fpath.exists():
-            print(f"  WARNING: Skipping missing file: {corpus_file}")
-            continue
+    print(f"[pretokenize] {source_type}: {len(inputs)} input file(s), {total_rows:,} rows")
 
-        print(f"  Processing: {corpus_file}")
-
-        with open(fpath, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    record = json.loads(line)
-                    text = record.get("text", "")
+    with tqdm(total=total_rows, desc=f"  {source_type}", unit="rows", unit_scale=True) as bar:
+        for input_path in inputs:
+            pf = pq.ParquetFile(input_path)
+            for batch in pf.iter_batches(batch_size=10000, columns=["text"]):
+                texts = batch.column("text").to_pylist()
+                for text in texts:
                     if not text:
+                        bar.update(1)
+                        continue
+                    text = text.strip()
+                    if not text:
+                        bar.update(1)
                         continue
 
-                    # Prepend language token
-                    lang_region = record.get("language_region", "")
-                    lang_token = get_lang_token(lang_region)
-                    full_text = f"{lang_token} {text}"
+                    # Tokenize — text already has special tokens from downloaders
+                    tokens = tokenizer.encode(text, add_special_tokens=False)
+                    tokens = tokens + [eos_id]
 
-                    # Tokenize
-                    tokens = tokenizer.encode(full_text, add_special_tokens=False)
-                    tokens.append(eos_id)  # document separator
-
-                    token_buffer.extend(tokens)
+                    buffer.extend(tokens)
                     total_tokens += len(tokens)
                     total_docs += 1
+                    bar.update(1)
+                    bar.set_postfix(kept=total_docs, refresh=False)
 
-                    # Write shard when buffer fills
-                    if len(token_buffer) >= chunk_size * seq_len:
-                        packed = pack_sequences(token_buffer, seq_len)
-                        shard_path = out_path / f"shard_{shard_idx:05d}.npy"
-                        np.save(shard_path, packed)
-                        print(f"    Shard {shard_idx}: {packed.shape[0]:,} sequences → {shard_path.name}")
-                        token_buffer = token_buffer[chunk_size * seq_len :]
+                    # Flush when buffer is large enough
+                    while len(buffer) >= BATCH_TOKENS:
+                        chunk = buffer[:BATCH_TOKENS]
+                        buffer = buffer[BATCH_TOKENS:]
+                        save_shard(chunk, shard_idx, output_dir)
                         shard_idx += 1
 
-                    if total_docs % 100_000 == 0:
-                        print(f"    Docs: {total_docs:,} | Tokens: {total_tokens:,}")
+    # Save remaining buffer
+    if buffer:
+        remainder = len(buffer) % SEQ_LEN
+        if remainder:
+            print(f"  [pretokenize] Truncating final buffer: discarding {remainder} tokens")
+        save_shard(buffer, shard_idx, output_dir)
+        shard_idx += 1
 
-                except Exception:
-                    continue
-
-    # Write final partial shard
-    if token_buffer:
-        packed = pack_sequences(token_buffer, seq_len)
-        if packed.shape[0] > 0:
-            shard_path = out_path / f"shard_{shard_idx:05d}.npy"
-            np.save(shard_path, packed)
-            print(f"    Final shard {shard_idx}: {packed.shape[0]:,} sequences")
-            shard_idx += 1
-
-    total_seqs = sum(
-        np.load(str(p), mmap_mode="r").shape[0]
-        for p in sorted(out_path.glob("shard_*.npy"))
-    )
-
-    print(f"\n{'=' * 60}")
-    print(f"  Pretokenization Complete")
-    print(f"{'=' * 60}")
-    print(f"  Documents:  {total_docs:,}")
-    print(f"  Tokens:     {total_tokens:,}")
-    print(f"  Sequences:  {total_seqs:,}  (× {seq_len} = {total_seqs * seq_len:,} tokens)")
-    print(f"  Shards:     {shard_idx}")
-    print(f"  Disk size:  ~{total_tokens * 2 / 1024**3:.1f} GB")
-    print(f"  Output:     {out_path}")
-    print()
+    return total_tokens, total_docs
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Pretokenize and sequence-pack corpus into .npy shards.",
-    )
-    parser.add_argument("--corpus", default=DEFAULT_CORPUS,
-                        help=f"Main corpus JSONL (default: {DEFAULT_CORPUS}).")
-    parser.add_argument("--banglish", default=DEFAULT_BANGLISH,
-                        help=f"Banglish corpus JSONL (default: {DEFAULT_BANGLISH}).")
-    parser.add_argument("--extra-corpus", nargs="*", default=[],
-                        help="Additional corpus JSONL files.")
-    parser.add_argument("--tokenizer-dir", default=DEFAULT_TOKENIZER_DIR,
-                        help=f"HF tokenizer directory (default: {DEFAULT_TOKENIZER_DIR}).")
-    parser.add_argument("--output-dir", "-o", default=DEFAULT_OUTPUT_DIR,
-                        help=f"Output shard directory (default: {DEFAULT_OUTPUT_DIR}).")
-    parser.add_argument("--seq-len", type=int, default=DEFAULT_SEQ_LEN,
-                        help=f"Sequence length (default: {DEFAULT_SEQ_LEN}).")
-    parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
-                        help=f"Sequences per shard (default: {DEFAULT_CHUNK_SIZE:,}).")
-
+    parser = argparse.ArgumentParser(description="Pretokenize and pack into .npy shards.")
+    parser.add_argument("--source", choices=["bangla", "english", "nmt", "sangraha", "all"], default="all",
+                        help="Which source type to pretokenize (default: all).")
     args = parser.parse_args()
 
-    corpus_files = [args.corpus, args.banglish] + args.extra_corpus
+    tokenizer = load_tokenizer()
+    print(f"[pretokenize] Tokenizer loaded (vocab={tokenizer.vocab_size})")
 
-    run_pretokenization(
-        corpus_files=corpus_files,
-        tokenizer_dir=args.tokenizer_dir,
-        output_dir=args.output_dir,
-        seq_len=args.seq_len,
-        chunk_size=args.chunk_size,
-    )
+    sources = list(SOURCE_CONFIGS.keys()) if args.source == "all" else [args.source]
+
+    grand_tokens = 0
+    grand_docs = 0
+
+    for source_type in sources:
+        config = SOURCE_CONFIGS[source_type]
+        tokens, docs = pretokenize_source(source_type, config, tokenizer)
+        grand_tokens += tokens
+        grand_docs += docs
+
+    # Calculate stats
+    total_shards = 0
+    for source_type in sources:
+        output_dir = SOURCE_CONFIGS[source_type]["output"]
+        if output_dir.exists():
+            shards = list(output_dir.glob("shard_*.npy"))
+            total_shards += len(shards)
+
+    tokens_per_step = 4 * 64 * SEQ_LEN
+    approx_steps = grand_tokens // tokens_per_step
+
+    print(f"\n{'=' * 50}")
+    print(f"=== PRETOKENIZATION COMPLETE ===")
+    print(f"  Documents:       {grand_docs:,}")
+    print(f"  Tokens:          {grand_tokens:,}  ({grand_tokens / 1e9:.2f}B)")
+    print(f"  Total shards:    {total_shards}")
+    for source_type in sources:
+        output_dir = SOURCE_CONFIGS[source_type]["output"]
+        n = len(list(output_dir.glob("shard_*.npy"))) if output_dir.exists() else 0
+        print(f"    {source_type:>10}: {n:>4} shards  →  {output_dir}")
+    print(f"  Approx steps:    {approx_steps:,}")
+    print(f"    (batch=4 × accum=64 × seq=2048 = {tokens_per_step:,} tokens/step)")
+    print(f"\n  ACTION: set max_steps: {approx_steps} in configs/default_training.yaml")
+    print(f"{'=' * 50}")
 
 
 if __name__ == "__main__":

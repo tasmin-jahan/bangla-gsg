@@ -60,7 +60,10 @@ credentials.*
 data/
 
 # ── Saved Artifacts (data, models, tokenizers, checkpoints) ─
-saved/
+saved/model/
+saved/checkpoints/
+saved/pretokenized/
+saved/data/
 
 # ── Data Files (anywhere in tree) ────────────────────────────
 *.jsonl
@@ -103,7 +106,6 @@ runs/
 mlruns/
 lightning_logs/
 outputs/
-logs/
 *.tfevents*
 events.out.*
 
