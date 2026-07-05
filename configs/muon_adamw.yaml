@@ -1,5 +1,5 @@
 # Hybrid Muon + AdamW optimizer config
-# Spec: BanglaFM_Model_Implementation_Spec.md §4.2
+# Spec: BanglaGSG_Model_Implementation_Spec.md §4.2
 
 # Muon: for all 2D dense matmul weights (~150M params)
 muon:

@@ -4,7 +4,7 @@ Token embeddings and RMSNorm for BanglaGSG.
 RMSNorm: Root Mean Square Layer Normalization (Zhang & Sennrich, 2019).
 TokenEmbedding: Embedding layer with weight-tying support for the LM head.
 
-Embedding init uses std = 1/sqrt(d_model) per BanglaFM spec §2 to keep
+Embedding init uses std = 1/sqrt(d_model) per BanglaGSG spec §2 to keep
 activation scale consistent with RMSNorm at d_model=1024.
 """
 

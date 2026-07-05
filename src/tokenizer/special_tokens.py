@@ -9,8 +9,6 @@ trainer, HF wrapper, model, data pipeline) imports from here.
 Token budget:  146 special  +  47,854 learned subwords  =  48,000 total vocab
 Token IDs:     0 – 145  are reserved for special tokens
                146 – 47,999  are learned by SentencePiece
-
-Reference: BanglaFM_Complete_Guide.md §2.4
 """
 
 from __future__ import annotations

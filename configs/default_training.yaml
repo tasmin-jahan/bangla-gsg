@@ -1,5 +1,5 @@
 # Training config for BanglaGSG
-# Spec: BanglaFM_Model_Implementation_Spec.md §4-5
+# Spec: BanglaGSG_Model_Implementation_Spec.md §4-5
 
 # LR schedule: warmup + cosine decay
 warmup_ratio: 0.015            # 1.5% of total steps

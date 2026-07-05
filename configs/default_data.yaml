@@ -1,8 +1,8 @@
 # Data config for BanglaGSG
 
 # Pretokenized data directories (output of pretokenize_and_pack.py)
-train_npy_dir: saved/data/pretokenized/train
-eval_npy_dir: saved/data/pretokenized/eval # set to null if no eval data yet
+train_npy_dir: saved/data/pretokenized
+eval_npy_dir: null # set to null if no eval data yet
 
 # DataLoader settings
 batch_size: 4 # physical batch size (sequences per GPU step)
