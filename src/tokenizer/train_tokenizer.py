@@ -11,7 +11,7 @@ Usage:
 
   # Directly from a JSONL corpus (extracts 'text' field automatically):
   python -m src.tokenizer.train_tokenizer \
-      --input saved/data/tokenizer_set/corpus.jsonl --jsonl
+      --input saved/data/tokenizer_corpus/corpus.jsonl
 """
 
 from __future__ import annotations
@@ -216,7 +216,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Train a SentencePiece Unigram tokenizer for BanglaGSG.",
     )
-    parser.add_argument("--input", "-i", required=True,
+    parser.add_argument("--input", "-i", default="saved/data/tokenizer_corpus/corpus.jsonl",
                         help="Path to training corpus (.txt or .jsonl).")
     parser.add_argument("--jsonl", action="store_true",
                         help="Input is JSONL — extract 'text' field automatically.")
@@ -241,7 +241,7 @@ def main():
         num_threads=args.num_threads,
         input_sentence_size=args.input_sentence_size,
         max_sentence_length=args.max_sentence_length,
-        jsonl=args.jsonl,
+        jsonl=(args.jsonl or str(args.input).endswith(".jsonl")),
     )
 
 
