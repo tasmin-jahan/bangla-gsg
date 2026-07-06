@@ -18,8 +18,8 @@ import torch.nn as nn
 
 from flash_attn import flash_attn_func
 
-from src.model.embeddings import PerHeadRMSNorm
-from src.model.rope import RotaryEmbedding
+from .embeddings import PerHeadRMSNorm
+from .rope import RotaryEmbedding
 
 
 class SlidingWindowAttention(nn.Module):

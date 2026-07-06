@@ -23,13 +23,13 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as grad_checkpoint
 
-from src.model.config import BanglaGSGConfig
-from src.model.embeddings import RMSNorm, TokenEmbedding
-from src.model.attention import GQAttention
-from src.model.swa import SlidingWindowAttention
-from src.model.gdn import GDNBlock
-from src.model.ffn import SwiGLU
-from src.model.rope import RotaryEmbedding
+from .config import BanglaGSGConfig
+from .embeddings import RMSNorm, TokenEmbedding
+from .attention import GQAttention
+from .swa import SlidingWindowAttention
+from .gdn import GDNBlock
+from .ffn import SwiGLU
+from .rope import RotaryEmbedding
 
 
 class BanglaGSGBlock(nn.Module):
