@@ -57,7 +57,6 @@ secrets/
 *.env
 .env.*
 credentials.*
-data/
 
 # ── Saved Artifacts (data, models, tokenizers, checkpoints) ─
 saved/model/

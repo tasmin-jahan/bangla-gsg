@@ -148,23 +148,13 @@ print('GDN: OK | SWA: OK | GQA: OK')
 
 ```bash
 source .venv/bin/activate
-
-python src/train.py \
-    --model configs/banglagsg_12l.yaml \
-    --training configs/default_training.yaml \
-    --optimizer configs/muon_adamw.yaml \
-    --data configs/default_data.yaml
+python src/train.py
 ```
 
 ### Resume from Checkpoint
 
 ```bash
-python src/train.py \
-    --model configs/banglagsg_12l.yaml \
-    --training configs/default_training.yaml \
-    --optimizer configs/muon_adamw.yaml \
-    --data configs/default_data.yaml \
-    --resume
+python src/train.py --resume
 ```
 
 ### Training Features

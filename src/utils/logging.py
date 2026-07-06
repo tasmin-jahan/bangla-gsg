@@ -20,7 +20,7 @@ class MetricLogger:
     """
 
     def __init__(self, log_dir: str, run_name: str = "default"):
-        self.log_dir = Path(log_dir) / run_name
+        self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.csv_path = self.log_dir / "metrics.csv"
         self.start_time = time.time()
@@ -33,6 +33,18 @@ class MetricLogger:
             writer.writeheader()
         self._csv_initialized = True
         self._fieldnames = fieldnames
+
+    def log_eval(self, metrics: Dict[str, float]):
+        """Log evaluation metrics to a separate CSV."""
+        eval_csv = self.log_dir / "eval_metrics.csv"
+        metrics["elapsed_s"] = round(time.time() - self.start_time, 1)
+        
+        file_exists = eval_csv.exists()
+        with open(eval_csv, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(metrics.keys()))
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(metrics)
 
     def log(self, metrics: Dict[str, float]):
         """

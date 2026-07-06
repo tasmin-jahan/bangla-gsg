@@ -225,15 +225,14 @@ class Trainer:
         if isinstance(self.eval_loader, dict):
             ppls = {}
             for name, loader in self.eval_loader.items():
-                ppl = eval_single_loader(loader)
-                ppls[name] = ppl
-                tqdm.write(f"  ✦ [Eval] ↳ {name}_ppl={ppl:.2f}")
+                ppls[name] = eval_single_loader(loader)
             self.model.train()
-            return sum(ppls.values()) / len(ppls)
+            avg = sum(ppls.values()) / len(ppls)
+            return {"overall": avg, **ppls}
         else:
             ppl = eval_single_loader(self.eval_loader)
             self.model.train()
-            return ppl
+            return {"overall": ppl}
 
     def resume(self, path: Optional[str] = None):
         """Resume training from a checkpoint."""
@@ -431,8 +430,14 @@ class Trainer:
 
                 # Evaluation
                 if self.eval_loader and self.global_step % self.config.eval_every == 0:
-                    val_ppl = self.evaluate()
+                    eval_results = self.evaluate()
+                    val_ppl = eval_results["overall"]
                     tqdm.write(f"  ✦ [Eval] overall_val_ppl={val_ppl:.2f}")
+
+                    # Log to eval_metrics.csv
+                    eval_log = {"step": self.global_step, "tokens_seen": self.tokens_seen}
+                    eval_log.update({f"val_ppl_{k}": round(v, 3) for k, v in eval_results.items()})
+                    self.logger.log_eval(eval_log)
 
                     if val_ppl < self.best_val_ppl:
                         self.best_val_ppl = val_ppl

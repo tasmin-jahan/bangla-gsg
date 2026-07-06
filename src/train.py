@@ -79,7 +79,7 @@ def main():
 
     # ── Persist model config to run log directory ─────────────────────────
     from pathlib import Path
-    run_log_dir = Path(trainer_config.log_dir) / trainer_config.run_name
+    run_log_dir = Path(trainer_config.log_dir)
     run_log_dir.mkdir(parents=True, exist_ok=True)
     model_config.to_yaml(str(run_log_dir / "model_config.yaml"))
 
