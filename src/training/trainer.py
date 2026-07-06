@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
+import signal
 
 from src.model.optim import build_param_groups
 from src.training.checkpoint import save_checkpoint, load_checkpoint, manage_checkpoints
@@ -102,6 +103,7 @@ class Trainer:
         self.config = config or TrainerConfig()
         self.model_config = model_config
         self.device = device
+        self._interrupt_requested = False
 
         # Get param lists for gradient clipping
         self.muon_params, self.adamw_params = build_param_groups(model)
@@ -123,6 +125,14 @@ class Trainer:
         self.global_step = 0
         self.tokens_seen = 0
         self.best_val_ppl = float("inf")
+
+    def _install_signal_handlers(self) -> None:
+        def _handler(signum, frame):
+            sig_name = signal.Signals(signum).name
+            tqdm.write(f"\n[Signal] Received {sig_name} — finishing current step then saving emergency checkpoint...")
+            self._interrupt_requested = True
+        signal.signal(signal.SIGINT, _handler)
+        signal.signal(signal.SIGTERM, _handler)
 
     def compute_loss(self, logits: torch.Tensor, targets: torch.Tensor) -> tuple:
         """
@@ -294,14 +304,15 @@ class Trainer:
             colour="cyan",
         )
 
-        try:
-            while self.global_step < self.total_steps:
-                # Get batch
-                try:
-                    batch = next(data_iter)
-                except StopIteration:
-                    data_iter = iter(self.train_loader)
-                    batch = next(data_iter)
+        self._install_signal_handlers()
+
+        while self.global_step < self.total_steps:
+            # Get batch
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                data_iter = iter(self.train_loader)
+                batch = next(data_iter)
 
             input_ids = batch["input_ids"].to(self.device)
             targets = input_ids[:, 1:].contiguous()
@@ -448,26 +459,27 @@ class Trainer:
                         keep_last=self.config.keep_checkpoints,
                         best_path=f"{self.config.checkpoint_dir}/best.pt",
                     )
-        except KeyboardInterrupt:
-            tqdm.write(f"\n[Trainer] KeyboardInterrupt (Ctrl+C) detected at step {self.global_step}. Saving emergency checkpoint...")
-            ckpt_path = f"{self.config.checkpoint_dir}/step_{self.global_step:08d}.pt"
-            save_checkpoint(
-                ckpt_path, self.model,
-                self.muon_optimizer, self.adamw_optimizer,
-                self.muon_scheduler, self.adamw_scheduler,
-                self.global_step, self.tokens_seen,
-                0.0, # Dummy loss for emergency
-                config=self.model_config.__dict__ if self.model_config else None,
-            )
-            manage_checkpoints(
-                self.config.checkpoint_dir,
-                keep_last=self.config.keep_checkpoints,
-                best_path=f"{self.config.checkpoint_dir}/best.pt",
-            )
-            pbar.close()
-            import sys
-            print("[Trainer] Emergency save complete. Exiting gracefully.")
-            sys.exit(0)
+
+                if self._interrupt_requested:
+                    tqdm.write(f"\n[Trainer] Interrupt acknowledged at step {self.global_step}. Saving emergency checkpoint...")
+                    ckpt_path = f"{self.config.checkpoint_dir}/step_{self.global_step:08d}.pt"
+                    save_checkpoint(
+                        ckpt_path, self.model,
+                        self.muon_optimizer, self.adamw_optimizer,
+                        self.muon_scheduler, self.adamw_scheduler,
+                        self.global_step, self.tokens_seen,
+                        running_loss / max(accum, 1) if running_loss > 0 else 0.0,
+                        config=self.model_config.__dict__ if self.model_config else None,
+                    )
+                    manage_checkpoints(
+                        self.config.checkpoint_dir,
+                        keep_last=self.config.keep_checkpoints,
+                        best_path=f"{self.config.checkpoint_dir}/best.pt",
+                    )
+                    pbar.close()
+                    import sys
+                    print("[Trainer] Emergency save complete. Exiting gracefully.")
+                    sys.exit(0)
 
         import os
         os.makedirs(self.config.model_dir, exist_ok=True)

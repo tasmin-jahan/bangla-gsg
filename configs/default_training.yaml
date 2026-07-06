@@ -7,7 +7,7 @@ min_lr_ratio: 0.1              # decay to 10% of peak
 
 # Gradient
 max_grad_norm: 1.0
-accumulation_steps: 42         # effective batch = 42 * batch_size (6) = 252
+accumulation_steps: 126        # effective batch = 126 * batch_size (2) = 252
 
 # Stability
 z_loss_weight: 1.0e-4          # spec §6.2

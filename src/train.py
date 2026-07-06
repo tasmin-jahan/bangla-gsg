@@ -90,7 +90,7 @@ def main():
 
     # ── Build model ───────────────────────────────────────────────────────
     print(f"\n[Init] Building model...")
-    model = BanglaGSGModel(model_config).to(device)
+    model = BanglaGSGModel(model_config).to(device, dtype=torch.bfloat16)
     param_counts = model.count_parameters()
     print(f"[Init] Total parameters: {param_counts['total']:,} ({param_counts['total']/1e6:.1f}M)")
     print(f"[Init]   Embedding: {param_counts['embedding']:,}")
@@ -107,8 +107,8 @@ def main():
     # ── torch.compile ─────────────────────────────────────────────────────
     if trainer_config.compile_model:
         try:
-            model = torch.compile(model, mode="reduce-overhead")
-            print("[Init] torch.compile enabled (reduce-overhead)")
+            model = torch.compile(model)
+            print("[Init] torch.compile enabled (default mode)")
         except Exception as e:
             print(f"[Init] torch.compile failed: {e} — continuing without compilation")
 
