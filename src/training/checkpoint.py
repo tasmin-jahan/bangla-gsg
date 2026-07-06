@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 import torch
+from tqdm import tqdm
 
 
 def save_checkpoint(
@@ -61,7 +62,7 @@ def save_checkpoint(
     }
 
     torch.save(checkpoint, path)
-    print(f"[Checkpoint] Saved step {step} → {path}")
+    tqdm.write(f"[Checkpoint] Saved step {step} → {path}")
 
 
 def load_checkpoint(
@@ -125,4 +126,4 @@ def manage_checkpoints(
     for ckpt in ckpts:
         if ckpt.resolve() not in protected:
             ckpt.unlink()
-            print(f"[Checkpoint] Deleted old checkpoint: {ckpt.name}")
+            tqdm.write(f"[Checkpoint] Deleted old checkpoint: {ckpt.name}")
