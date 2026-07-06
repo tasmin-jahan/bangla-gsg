@@ -21,6 +21,7 @@ import yaml
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tqdm import tqdm
 
 from src.model.optim import build_param_groups
 from src.training.checkpoint import save_checkpoint, load_checkpoint, manage_checkpoints
@@ -56,6 +57,7 @@ class TrainerConfig:
     max_steps: int = 0  # 0 = compute from data
     log_every: int = 10
     eval_every: int = 500
+    eval_batches: int = 50 # How many batches to evaluate on mid-training
     grad_norm_monitor_steps: int = 300
 
     # Pad token
@@ -153,6 +155,30 @@ class Trainer:
         adamw_norm = torch.nn.utils.clip_grad_norm_(self.adamw_params, float("inf")).item()
         return muon_norm, adamw_norm
 
+    def compute_component_grad_norms(self) -> dict:
+        """Compute per-component gradient L2 norms for analysis."""
+        gdn_sq = 0.0
+        swa_sq = 0.0
+        gqa_sq = 0.0
+
+        for name, p in self.model.named_parameters():
+            if p.grad is None:
+                continue
+            g_sq = p.grad.data.float().pow(2).sum().item()
+            name_lower = name.lower()
+            if "gdn" in name_lower:
+                gdn_sq += g_sq
+            elif "swa" in name_lower:
+                swa_sq += g_sq
+            elif "gqa" in name_lower:
+                gqa_sq += g_sq
+
+        return {
+            "gdn_grad_norm": math.sqrt(gdn_sq),
+            "swa_grad_norm": math.sqrt(swa_sq),
+            "gqa_grad_norm": math.sqrt(gqa_sq),
+        }
+
     @torch.no_grad()
     def evaluate(self) -> float:
         """Compute validation perplexity."""
@@ -160,24 +186,39 @@ class Trainer:
             return float("inf")
 
         self.model.eval()
-        total_loss = 0.0
-        n_batches = 0
 
-        for batch in self.eval_loader:
-            input_ids = batch["input_ids"].to(self.device)
-            targets = input_ids[:, 1:].contiguous()
-            input_ids = input_ids[:, :-1].contiguous()
+        def eval_single_loader(loader):
+            total_loss = 0.0
+            n_batches = 0
+            for i, batch in enumerate(loader):
+                if self.config.eval_batches > 0 and i >= self.config.eval_batches:
+                    break
+                input_ids = batch["input_ids"].to(self.device)
+                targets = input_ids[:, 1:].contiguous()
+                input_ids = input_ids[:, :-1].contiguous()
 
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                logits = self.model(input_ids)
-                loss, _, _ = self.compute_loss(logits, targets)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    logits = self.model(input_ids)
+                    loss, _, _ = self.compute_loss(logits, targets)
 
-            total_loss += loss.item()
-            n_batches += 1
+                total_loss += loss.item()
+                n_batches += 1
+            
+            avg_loss = total_loss / max(n_batches, 1)
+            return math.exp(min(avg_loss, 20))
 
-        self.model.train()
-        avg_loss = total_loss / max(n_batches, 1)
-        return math.exp(min(avg_loss, 20))  # clamp to avoid overflow
+        if isinstance(self.eval_loader, dict):
+            ppls = {}
+            for name, loader in self.eval_loader.items():
+                ppl = eval_single_loader(loader)
+                ppls[name] = ppl
+                tqdm.write(f"  ✦ [Eval] ↳ {name}_ppl={ppl:.2f}")
+            self.model.train()
+            return sum(ppls.values()) / len(ppls)
+        else:
+            ppl = eval_single_loader(self.eval_loader)
+            self.model.train()
+            return ppl
 
     def resume(self, path: Optional[str] = None):
         """Resume training from a checkpoint."""
@@ -219,7 +260,38 @@ class Trainer:
         running_z = 0.0
         step_start = time.time()
 
+        # Fast-forward dataloader to prevent duplicate sequences on resume
+        batches_to_skip = self.global_step * accum
         data_iter = iter(self.train_loader)
+        
+        if batches_to_skip > 0:
+            print(f"[Trainer] Fast-forwarding dataloader by {batches_to_skip} batches...")
+            for _ in range(batches_to_skip):
+                try:
+                    next(data_iter)
+                except StopIteration:
+                    data_iter = iter(self.train_loader)
+                    next(data_iter)
+            print("[Trainer] Dataloader fast-forward complete.")
+
+        session_start = time.time()
+        resume_step = self.global_step
+
+        pbar = tqdm(
+            total=self.total_steps,
+            initial=self.global_step,
+            desc="Training",
+            unit="step",
+            dynamic_ncols=True,
+            bar_format=(
+                "\033[36m{desc}\033[0m "
+                "{percentage:5.1f}% "
+                "|{bar}| "
+                "{n_fmt}/{total_fmt} "
+                "{postfix}"
+            ),
+            colour="cyan",
+        )
 
         while self.global_step < self.total_steps:
             # Get batch
@@ -281,25 +353,60 @@ class Trainer:
 
                     lr_muon = self.muon_scheduler.get_last_lr()[0]
                     lr_adamw = self.adamw_scheduler.get_last_lr()[0]
+                    
+                    gpu_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+                    peak_gpu_mem = torch.cuda.max_memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+                    ppl = math.exp(min(avg_ce, 20.0))
+                    epoch_frac = self.global_step / max(self.total_steps, 1)
 
-                    self.logger.log_stdout(
-                        self.global_step, self.total_steps,
-                        avg_loss, lr_muon, lr_adamw,
-                        tokens_per_sec, muon_gnorm, adamw_gnorm,
+                    # ETA calculation
+                    session_elapsed = time.time() - session_start
+                    steps_this_session = self.global_step - resume_step
+                    if steps_this_session > 0:
+                        sec_per_step = session_elapsed / steps_this_session
+                        eta_sec = sec_per_step * (self.total_steps - self.global_step)
+                    else:
+                        eta_sec = -1
+                        
+                    def _fmt_time(s):
+                        if s < 0: return "??:??:??"
+                        h, m = divmod(s, 3600)
+                        m, s = divmod(m, 60)
+                        return f"{int(h)}h{int(m):02d}m{int(s):02d}s" if h > 0 else (f"{int(m)}m{int(s):02d}s" if m > 0 else f"{int(s)}s")
+
+                    eta_str = _fmt_time(eta_sec)
+                    elapsed_str = _fmt_time(session_elapsed)
+
+                    pbar.set_postfix_str(
+                        f"\033[90m[{elapsed_str} < \033[97m{eta_str}\033[90m]\033[0m "
+                        f"loss=\033[93m{avg_loss:.3f}\033[0m "
+                        f"ppl=\033[93m{ppl:.1f}\033[0m "
+                        f"tok/s=\033[92m{tokens_per_sec:,.0f}\033[0m "
+                        f"gpu=\033[95m{peak_gpu_mem:.0f}\033[0mMB"
                     )
+
+                    comp_norms = self.compute_component_grad_norms()
 
                     self.logger.log({
                         "step": self.global_step,
                         "tokens_seen": self.tokens_seen,
+                        "epoch_frac": round(epoch_frac, 5),
                         "loss": round(avg_loss, 5),
-                        "ce_loss": round(avg_ce, 5),
+                        "perplexity": round(ppl, 3),
                         "z_loss": round(avg_z, 7),
                         "lr_muon": lr_muon,
                         "lr_adamw": lr_adamw,
                         "grad_norm_muon": muon_gnorm,
                         "grad_norm_adamw": adamw_gnorm,
+                        "gdn_grad_norm": comp_norms["gdn_grad_norm"],
+                        "swa_grad_norm": comp_norms["swa_grad_norm"],
+                        "gqa_grad_norm": comp_norms["gqa_grad_norm"],
+                        "tokens_per_sec": round(tokens_per_sec, 1),
+                        "gpu_mem_mb": round(gpu_mem, 1),
+                        "peak_gpu_mem_mb": round(peak_gpu_mem, 1)
                     })
 
+                pbar.update(1)
                 running_loss = 0.0
                 running_ce = 0.0
                 running_z = 0.0
@@ -308,7 +415,7 @@ class Trainer:
                 # Evaluation
                 if self.eval_loader and self.global_step % self.config.eval_every == 0:
                     val_ppl = self.evaluate()
-                    print(f"[Eval] step {self.global_step} | val_ppl={val_ppl:.2f}")
+                    tqdm.write(f"  ✦ [Eval] overall_val_ppl={val_ppl:.2f}")
 
                     if val_ppl < self.best_val_ppl:
                         self.best_val_ppl = val_ppl
@@ -325,6 +432,7 @@ class Trainer:
                 # Periodic checkpointing
                 if self.global_step % self.config.checkpoint_every == 0:
                     ckpt_path = f"{self.config.checkpoint_dir}/step_{self.global_step:08d}.pt"
+                    tqdm.write(f"  💾 Checkpoint step={self.global_step:,} → {ckpt_path}")
                     save_checkpoint(
                         ckpt_path, self.model,
                         self.muon_optimizer, self.adamw_optimizer,
@@ -339,4 +447,5 @@ class Trainer:
                         best_path=f"{self.config.checkpoint_dir}/best.pt",
                     )
 
+        pbar.close()
         print(f"[Trainer] Training complete. {self.global_step} steps, {self.tokens_seen:,} tokens.")

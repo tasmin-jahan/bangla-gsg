@@ -18,8 +18,11 @@ compile_model: true            # spec §5.5 (torch.compile)
 
 # Checkpointing (spec §7)
 checkpoint_dir: checkpoints
-checkpoint_every: 2000
+checkpoint_every: 1000
 keep_checkpoints: 3
+
+# Eval limits
+eval_batches: 50
 
 # Logging
 log_dir: logs

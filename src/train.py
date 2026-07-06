@@ -128,21 +128,38 @@ def main():
         npy_dir=train_npy_dir,
         batch_size=batch_size,
         num_workers=num_workers,
-        shuffle=True,
+        shuffle=False,  # Set to False to respect manual shard interleaving
         pin_memory=True,
         max_shards=max_shards,
     )
 
     eval_loader = None
     if eval_npy_dir:
+        from pathlib import Path
+        eval_path = Path(eval_npy_dir)
         try:
-            eval_loader = build_dataloader(
-                npy_dir=eval_npy_dir,
-                batch_size=batch_size,
-                num_workers=num_workers,
-                shuffle=False,
-                pin_memory=True,
-            )
+            subdirs = [d for d in eval_path.iterdir() if d.is_dir()]
+            if subdirs:
+                eval_loader = {}
+                for subdir in subdirs:
+                    if list(subdir.rglob("*.npy")):
+                        eval_loader[subdir.name] = build_dataloader(
+                            npy_dir=str(subdir),
+                            batch_size=batch_size,
+                            num_workers=num_workers,
+                            shuffle=False,
+                            pin_memory=True,
+                        )
+                if not eval_loader:
+                    eval_loader = None
+            else:
+                eval_loader = build_dataloader(
+                    npy_dir=eval_npy_dir,
+                    batch_size=batch_size,
+                    num_workers=num_workers,
+                    shuffle=False,
+                    pin_memory=True,
+                )
         except FileNotFoundError:
             print(f"[Init] Eval dir not found: {eval_npy_dir} — skipping eval")
 
