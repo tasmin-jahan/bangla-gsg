@@ -105,6 +105,10 @@ class Trainer:
         self.device = device
         self._interrupt_requested = False
 
+        # Speed optimizations (TF32)
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
         # Get param lists for gradient clipping
         self.muon_params, self.adamw_params = build_param_groups(model)
 

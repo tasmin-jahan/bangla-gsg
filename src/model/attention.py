@@ -79,7 +79,7 @@ class GQAttention(nn.Module):
         # Flash Attention 2 — full causal (no window restriction)
         # flash_attn_func expects (B, T, H, D) layout — already correct
         attn_output = flash_attn_func(
-            q, k, v,
+            q.to(torch.bfloat16), k.to(torch.bfloat16), v.to(torch.bfloat16),
             causal=True,
         )
 

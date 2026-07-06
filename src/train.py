@@ -90,7 +90,7 @@ def main():
 
     # ── Build model ───────────────────────────────────────────────────────
     print(f"\n[Init] Building model...")
-    model = BanglaGSGModel(model_config).to(device, dtype=torch.bfloat16)
+    model = BanglaGSGModel(model_config).to(device)
     param_counts = model.count_parameters()
     print(f"[Init] Total parameters: {param_counts['total']:,} ({param_counts['total']/1e6:.1f}M)")
     print(f"[Init]   Embedding: {param_counts['embedding']:,}")
