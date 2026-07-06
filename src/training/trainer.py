@@ -358,48 +358,48 @@ class Trainer:
                 self.muon_optimizer.zero_grad(set_to_none=True)
                 self.adamw_optimizer.zero_grad(set_to_none=True)
 
-                # Logging
+                # Terminal UI calculations (Every Step)
                 avg_loss = running_loss / accum
                 avg_ce = running_ce / accum
                 avg_z = running_z / accum
 
-                if self.global_step % self.config.log_every == 0:
-                    elapsed = time.time() - step_start
-                    tokens_per_sec = (accum * input_ids.numel()) / max(elapsed, 1e-6)
+                elapsed = time.time() - step_start
+                tokens_per_sec = (accum * input_ids.numel()) / max(elapsed, 1e-6)
+                ppl = math.exp(min(avg_ce, 20.0))
+                peak_gpu_mem = torch.cuda.max_memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
 
+                # ETA calculation
+                session_elapsed = time.time() - session_start
+                steps_this_session = self.global_step - resume_step
+                if steps_this_session > 0:
+                    sec_per_step = session_elapsed / steps_this_session
+                    eta_sec = sec_per_step * (self.total_steps - self.global_step)
+                else:
+                    eta_sec = -1
+                    
+                def _fmt_time(s):
+                    if s < 0: return "??:??:??"
+                    h, m = divmod(s, 3600)
+                    m, s = divmod(m, 60)
+                    return f"{int(h)}h{int(m):02d}m{int(s):02d}s" if h > 0 else (f"{int(m)}m{int(s):02d}s" if m > 0 else f"{int(s)}s")
+
+                eta_str = _fmt_time(eta_sec)
+                elapsed_str = _fmt_time(session_elapsed)
+
+                pbar.set_postfix_str(
+                    f"\033[90m[{elapsed_str} < \033[97m{eta_str}\033[90m]\033[0m "
+                    f"loss=\033[93m{avg_loss:.3f}\033[0m "
+                    f"ppl=\033[93m{ppl:.1f}\033[0m "
+                    f"tok/s=\033[92m{tokens_per_sec:,.0f}\033[0m "
+                    f"gpu=\033[95m{peak_gpu_mem:.0f}\033[0mMB"
+                )
+
+                # CSV Logging (Only every 'log_every' steps)
+                if self.global_step % self.config.log_every == 0:
                     lr_muon = self.muon_scheduler.get_last_lr()[0]
                     lr_adamw = self.adamw_scheduler.get_last_lr()[0]
-                    
                     gpu_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
-                    peak_gpu_mem = torch.cuda.max_memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
-                    ppl = math.exp(min(avg_ce, 20.0))
                     epoch_frac = self.global_step / max(self.total_steps, 1)
-
-                    # ETA calculation
-                    session_elapsed = time.time() - session_start
-                    steps_this_session = self.global_step - resume_step
-                    if steps_this_session > 0:
-                        sec_per_step = session_elapsed / steps_this_session
-                        eta_sec = sec_per_step * (self.total_steps - self.global_step)
-                    else:
-                        eta_sec = -1
-                        
-                    def _fmt_time(s):
-                        if s < 0: return "??:??:??"
-                        h, m = divmod(s, 3600)
-                        m, s = divmod(m, 60)
-                        return f"{int(h)}h{int(m):02d}m{int(s):02d}s" if h > 0 else (f"{int(m)}m{int(s):02d}s" if m > 0 else f"{int(s)}s")
-
-                    eta_str = _fmt_time(eta_sec)
-                    elapsed_str = _fmt_time(session_elapsed)
-
-                    pbar.set_postfix_str(
-                        f"\033[90m[{elapsed_str} < \033[97m{eta_str}\033[90m]\033[0m "
-                        f"loss=\033[93m{avg_loss:.3f}\033[0m "
-                        f"ppl=\033[93m{ppl:.1f}\033[0m "
-                        f"tok/s=\033[92m{tokens_per_sec:,.0f}\033[0m "
-                        f"gpu=\033[95m{peak_gpu_mem:.0f}\033[0mMB"
-                    )
 
                     comp_norms = self.compute_component_grad_norms()
 
