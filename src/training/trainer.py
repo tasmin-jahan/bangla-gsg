@@ -47,10 +47,11 @@ class TrainerConfig:
     compile_model: bool = True
 
     # Checkpointing
-    checkpoint_dir: str = "checkpoints"
+    checkpoint_dir: str = "saved/checkpoints"
     checkpoint_every: int = 2000
     keep_checkpoints: int = 3
-    log_dir: str = "logs"
+    log_dir: str = "saved/logs"
+    model_dir: str = "saved/model"
 
     # Run
     run_name: str = "default"
@@ -446,6 +447,12 @@ class Trainer:
                         keep_last=self.config.keep_checkpoints,
                         best_path=f"{self.config.checkpoint_dir}/best.pt",
                     )
+
+        import os
+        os.makedirs(self.config.model_dir, exist_ok=True)
+        final_path = f"{self.config.model_dir}/model.pt"
+        torch.save(self.model.state_dict(), final_path)
+        tqdm.write(f"  💾 Final model saved to {final_path}")
 
         pbar.close()
         print(f"[Trainer] Training complete. {self.global_step} steps, {self.tokens_seen:,} tokens.")
