@@ -73,7 +73,6 @@ saved/data/
 *.memmap
 *.arrow
 *.parquet
-*.csv
 *.tsv
 !configs/*.yaml
 !configs/*.yml
