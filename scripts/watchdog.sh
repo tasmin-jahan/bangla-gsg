@@ -8,7 +8,7 @@
 # ══════════════════════════════════════════════════════════════
 #  CONFIG
 # ══════════════════════════════════════════════════════════════
-TRAINING_PROCESS="src/train.py"
+TRAINING_PROCESS="train.py"
 CHECK_HOST="8.8.8.8"
 GRACE_SECONDS=150
 CHECKPOINT_WAIT_SECONDS=30
