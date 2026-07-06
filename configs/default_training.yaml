@@ -14,7 +14,7 @@ z_loss_weight: 1.0e-4          # spec §6.2
 
 # Memory optimizations
 gradient_checkpointing: true   # spec §5.4
-compile_model: true            # spec §5.5 (torch.compile)
+compile_model: false           # disabled due to ptxas compiler bug on GDN kernels
 
 # Checkpointing (spec §7)
 checkpoint_dir: saved/checkpoints

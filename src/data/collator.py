@@ -7,6 +7,11 @@ Wraps ShardedNpyDataset with PyTorch DataLoader.
 from torch.utils.data import DataLoader
 
 from src.data.dataset import ShardedNpyDataset
+import signal
+
+def ignore_sigint(worker_id):
+    """Prevent DataLoader workers from dying instantly on Ctrl+C."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def build_dataloader(
@@ -40,4 +45,5 @@ def build_dataloader(
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=True,  # Drop incomplete batches for gradient accumulation consistency
+        worker_init_fn=ignore_sigint,
     )

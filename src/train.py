@@ -27,6 +27,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
 import torch
+import warnings
+
+# Suppress harmless Triton deprecation warnings from third-party attention libraries
+warnings.filterwarnings("ignore", message=".*tl.make_block_ptr is deprecated.*")
 
 from src.model.config import BanglaGSGConfig
 from src.model.model import BanglaGSGModel
