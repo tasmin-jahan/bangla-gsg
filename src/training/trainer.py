@@ -294,13 +294,14 @@ class Trainer:
             colour="cyan",
         )
 
-        while self.global_step < self.total_steps:
-            # Get batch
-            try:
-                batch = next(data_iter)
-            except StopIteration:
-                data_iter = iter(self.train_loader)
-                batch = next(data_iter)
+        try:
+            while self.global_step < self.total_steps:
+                # Get batch
+                try:
+                    batch = next(data_iter)
+                except StopIteration:
+                    data_iter = iter(self.train_loader)
+                    batch = next(data_iter)
 
             input_ids = batch["input_ids"].to(self.device)
             targets = input_ids[:, 1:].contiguous()
@@ -447,6 +448,26 @@ class Trainer:
                         keep_last=self.config.keep_checkpoints,
                         best_path=f"{self.config.checkpoint_dir}/best.pt",
                     )
+        except KeyboardInterrupt:
+            tqdm.write(f"\n[Trainer] KeyboardInterrupt (Ctrl+C) detected at step {self.global_step}. Saving emergency checkpoint...")
+            ckpt_path = f"{self.config.checkpoint_dir}/step_{self.global_step:08d}.pt"
+            save_checkpoint(
+                ckpt_path, self.model,
+                self.muon_optimizer, self.adamw_optimizer,
+                self.muon_scheduler, self.adamw_scheduler,
+                self.global_step, self.tokens_seen,
+                0.0, # Dummy loss for emergency
+                config=self.model_config.__dict__ if self.model_config else None,
+            )
+            manage_checkpoints(
+                self.config.checkpoint_dir,
+                keep_last=self.config.keep_checkpoints,
+                best_path=f"{self.config.checkpoint_dir}/best.pt",
+            )
+            pbar.close()
+            import sys
+            print("[Trainer] Emergency save complete. Exiting gracefully.")
+            sys.exit(0)
 
         import os
         os.makedirs(self.config.model_dir, exist_ok=True)

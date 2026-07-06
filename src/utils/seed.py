@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 
-def set_seed(seed: int = 42):
+def set_seed(seed: int = 1552):
     """Set all random seeds for reproducibility (spec §7)."""
     random.seed(seed)
     np.random.seed(seed)

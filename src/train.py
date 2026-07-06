@@ -39,20 +39,20 @@ from src.utils.seed import set_seed
 
 def parse_args():
     parser = argparse.ArgumentParser(description="BanglaGSG Training")
-    parser.add_argument("--model", type=str, required=True,
+    parser.add_argument("--model", type=str, default="configs/banglagsg_12l.yaml",
                         help="Path to model config YAML")
-    parser.add_argument("--training", type=str, required=True,
+    parser.add_argument("--training", type=str, default="configs/default_training.yaml",
                         help="Path to training config YAML")
-    parser.add_argument("--optimizer", type=str, required=True,
+    parser.add_argument("--optimizer", type=str, default="configs/muon_adamw.yaml",
                         help="Path to optimizer config YAML")
-    parser.add_argument("--data", type=str, required=True,
+    parser.add_argument("--data", type=str, default="configs/default_data.yaml",
                         help="Path to data config YAML")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint")
     parser.add_argument("--resume-path", type=str, default=None,
                         help="Resume from a specific checkpoint path")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed (default: 42)")
+    parser.add_argument("--seed", type=int, default=1552,
+                        help="Random seed (default: 1552)")
     return parser.parse_args()
 
 
