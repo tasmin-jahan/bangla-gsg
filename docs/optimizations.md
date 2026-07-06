@@ -9,17 +9,18 @@ This document outlines the performance and memory optimization techniques implem
 - **Precision**: We keep the master weights and optimizer momentum states in high-precision `float32`. This prevents small gradients from being lost or truncated during optimizer updates, which is a common failure mode in "Pure BF16" training.
 
 ## 2. FlashAttention-2
-**Implementation**: `flash_attn_func(q.to(bfloat16), k.to(bfloat16), v.to(bfloat16), causal=True)`
+**Implementation**: `flash_attn_func(q.to(torch.bfloat16), k.to(torch.bfloat16), v.to(torch.bfloat16), causal=True)`
 **Rationale**:
 - Replaces standard PyTorch attention with a highly optimized fused CUDA kernel.
 - Scales linearly in memory with sequence length instead of quadratically, completely eliminating the VRAM bottleneck of the attention mechanism.
+- **Explicit Casting Requirement**: Because we maintain FP32 master weights to prevent gradient underflow, we explicitly cast the Q, K, and V tensors down to `bfloat16` directly before passing them into `flash_attn_func` in both our GQA and SWA layers. FlashAttention is a raw hardware wrapper for Tensor Cores and completely rejects FP32 inputs.
 
-## 3. PyTorch 2.0 Compiler (`torch.compile`)
-**Implementation**: `model = torch.compile(model)`
+## 3. PyTorch 2.0 Compiler (`torch.compile`) — **[CURRENTLY DISABLED]**
+**Implementation**: `compile_model: false` (in `configs/default_training.yaml`)
 **Rationale**:
-- Reads the entire PyTorch execution graph before training starts and fuses multiple small operations (like activation functions, layer norms, and addition) into single, unified CUDA kernels.
-- **Why default mode?** We specifically avoid `mode="reduce-overhead"` because that mode utilizes CUDA Graphs. When paired with heavy gradient accumulation, CUDA Graphs cause memory buffer overwrites (and OOMs). The default mode gives massive kernel fusion speedups without the rigid CUDA Graph memory constraints.
-- **Why GDN is superior to Mamba here**: Mamba relies on hand-written C++ kernels (`mamba_inner_fn`) that constantly trigger "graph breaks" and crash the PyTorch compiler. GDN (Gated Delta Networks) is built using standard PyTorch primitives and Triton kernels, allowing `torch.compile` to perfectly optimize the entire architecture without a single graph break.
+- The PyTorch compiler usually provides massive kernel fusion speedups without graph breaks.
+- **Why it is currently disabled:** During testing, the underlying NVIDIA PTX Assembler (`ptxas`) suffered a fatal crash (Error Code -2) when attempting to compile the incredibly complex Triton kernels underlying the Gated Delta Networks (GDN). This is a known register-allocation failure on RTX 40-series (sm_89) GPUs. 
+- We bypass this by running in standard eager mode, falling back to the standard JIT-compiled Triton kernels which still offer phenomenal performance.
 
 ## 4. TensorFloat-32 (TF32) Math
 **Implementation**: `torch.backends.cuda.matmul.allow_tf32 = True`
@@ -44,6 +45,7 @@ This document outlines the performance and memory optimization techniques implem
 - Gradient checkpointing throws away the activations after the forward pass and simply recomputes them on the fly during the backward pass. It trades a slight (~20%) compute penalty for massive VRAM savings, which allows us to fit the model into 12GB.
 
 ## 8. Graceful Interrupts (SIGINT Handling)
-**Implementation**: Signal interceptors for `Ctrl+C` in `trainer.py`
+**Implementation**: Signal interceptors for `Ctrl+C` in `trainer.py` and `worker_init_fn=ignore_sigint` in `collator.py`.
 **Rationale**:
 - Instead of instantly crashing and losing up to 999 steps of progress when interrupted, the trainer intercepts the kill signal, finishes the current operation, explicitly dumps an emergency checkpoint to disk, and cleanly exits. This guarantees 100% progress retention.
+- **DataLoader Immunity:** The Python `multiprocessing` workers used by the DataLoader are explicitly told to ignore `SIGINT`. This prevents the workers from dying instantly on `Ctrl+C`, ensuring the main training loop can finish its final forward/backward pass without throwing a `RuntimeError: DataLoader worker exited unexpectedly`.
