@@ -126,4 +126,3 @@ def manage_checkpoints(
     for ckpt in ckpts:
         if ckpt.resolve() not in protected:
             ckpt.unlink()
-            tqdm.write(f"[Checkpoint] Deleted old checkpoint: {ckpt.name}")

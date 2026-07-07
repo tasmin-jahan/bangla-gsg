@@ -339,14 +339,11 @@ class Trainer:
             if micro_step % accum == 0:
                 self.global_step += 1
 
-                # Per-group gradient norm monitoring
+                # Compute all grad norms on log steps, before clipping
                 muon_gnorm, adamw_gnorm = None, None
-                if self.global_step <= self.config.grad_norm_monitor_steps:
-                    muon_gnorm, adamw_gnorm = self.compute_grad_norms()
-
-                # Component grad norm monitoring (only on log steps)
                 comp_norms = None
                 if self.global_step % self.config.log_every == 0:
+                    muon_gnorm, adamw_gnorm = self.compute_grad_norms()
                     comp_norms = self.compute_component_grad_norms()
 
                 # Global gradient clipping across both groups
@@ -417,9 +414,9 @@ class Trainer:
                         "lr_adamw": lr_adamw,
                         "grad_norm_muon": muon_gnorm,
                         "grad_norm_adamw": adamw_gnorm,
-                        "gdn_grad_norm": comp_norms["gdn_grad_norm"] if comp_norms else 0.0,
-                        "swa_grad_norm": comp_norms["swa_grad_norm"] if comp_norms else 0.0,
-                        "gqa_grad_norm": comp_norms["gqa_grad_norm"] if comp_norms else 0.0,
+                        "gdn_grad_norm": comp_norms["gdn_grad_norm"] if comp_norms else None,
+                        "swa_grad_norm": comp_norms["swa_grad_norm"] if comp_norms else None,
+                        "gqa_grad_norm": comp_norms["gqa_grad_norm"] if comp_norms else None,
                         "tokens_per_sec": round(tokens_per_sec, 1),
                         "gpu_mem_mb": round(gpu_mem, 1),
                         "peak_gpu_mem_mb": round(peak_gpu_mem, 1)
