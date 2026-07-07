@@ -132,7 +132,7 @@ def main():
         npy_dir=train_npy_dir,
         batch_size=batch_size,
         num_workers=num_workers,
-        shuffle=False,  # Set to False to respect manual shard interleaving
+        shuffle=True,  # CRITICAL: Must be True to mix Bangla, English, and NMT in every batch!
         pin_memory=True,
         max_shards=max_shards,
     )
