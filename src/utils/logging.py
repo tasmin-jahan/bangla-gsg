@@ -28,9 +28,12 @@ class MetricLogger:
 
     def _init_csv(self, fieldnames: list):
         """Initialize CSV file with headers."""
-        with open(self.csv_path, "w", newline="") as f:
+        file_exists = self.csv_path.exists() and self.csv_path.stat().st_size > 0
+        mode = "a" if file_exists else "w"
+        with open(self.csv_path, mode, newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
+            if not file_exists:
+                writer.writeheader()
         self._csv_initialized = True
         self._fieldnames = fieldnames
 
