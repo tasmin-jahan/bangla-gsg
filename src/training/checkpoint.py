@@ -88,9 +88,9 @@ def load_checkpoint(
     adamw_scheduler.load_state_dict(checkpoint["adamw_sched_state_dict"])
 
     # Restore RNG state
-    torch.set_rng_state(checkpoint["rng_state"])
+    torch.set_rng_state(checkpoint["rng_state"].cpu())
     if checkpoint.get("cuda_rng_state") is not None and torch.cuda.is_available():
-        torch.cuda.set_rng_state(checkpoint["cuda_rng_state"])
+        torch.cuda.set_rng_state(checkpoint["cuda_rng_state"].cpu())
 
     print(f"[Checkpoint] Resumed from step {checkpoint['step']} ← {path}")
     return checkpoint
