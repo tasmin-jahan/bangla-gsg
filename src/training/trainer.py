@@ -344,6 +344,11 @@ class Trainer:
                 if self.global_step <= self.config.grad_norm_monitor_steps:
                     muon_gnorm, adamw_gnorm = self.compute_grad_norms()
 
+                # Component grad norm monitoring (only on log steps)
+                comp_norms = None
+                if self.global_step % self.config.log_every == 0:
+                    comp_norms = self.compute_component_grad_norms()
+
                 # Global gradient clipping across both groups
                 torch.nn.utils.clip_grad_norm_(
                     list(self.muon_params) + list(self.adamw_params),
@@ -401,8 +406,6 @@ class Trainer:
                     gpu_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
                     epoch_frac = self.global_step / max(self.total_steps, 1)
 
-                    comp_norms = self.compute_component_grad_norms()
-
                     self.logger.log({
                         "step": self.global_step,
                         "tokens_seen": self.tokens_seen,
@@ -414,9 +417,9 @@ class Trainer:
                         "lr_adamw": lr_adamw,
                         "grad_norm_muon": muon_gnorm,
                         "grad_norm_adamw": adamw_gnorm,
-                        "gdn_grad_norm": comp_norms["gdn_grad_norm"],
-                        "swa_grad_norm": comp_norms["swa_grad_norm"],
-                        "gqa_grad_norm": comp_norms["gqa_grad_norm"],
+                        "gdn_grad_norm": comp_norms["gdn_grad_norm"] if comp_norms else 0.0,
+                        "swa_grad_norm": comp_norms["swa_grad_norm"] if comp_norms else 0.0,
+                        "gqa_grad_norm": comp_norms["gqa_grad_norm"] if comp_norms else 0.0,
                         "tokens_per_sec": round(tokens_per_sec, 1),
                         "gpu_mem_mb": round(gpu_mem, 1),
                         "peak_gpu_mem_mb": round(peak_gpu_mem, 1)
@@ -438,18 +441,6 @@ class Trainer:
                     eval_log = {"step": self.global_step, "tokens_seen": self.tokens_seen}
                     eval_log.update({f"val_ppl_{k}": round(v, 3) for k, v in eval_results.items()})
                     self.logger.log_eval(eval_log)
-
-                    if val_ppl < self.best_val_ppl:
-                        self.best_val_ppl = val_ppl
-                        best_path = f"{self.config.checkpoint_dir}/best.pt"
-                        save_checkpoint(
-                            best_path, self.model,
-                            self.muon_optimizer, self.adamw_optimizer,
-                            self.muon_scheduler, self.adamw_scheduler,
-                            self.global_step, self.tokens_seen,
-                            avg_loss, val_ppl,
-                            config=self.model_config.__dict__ if self.model_config else None,
-                        )
 
                 # Periodic checkpointing
                 if self.global_step % self.config.checkpoint_every == 0:
