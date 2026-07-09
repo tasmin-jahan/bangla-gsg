@@ -35,7 +35,8 @@ warnings.filterwarnings("ignore", message=".*tl.make_block_ptr is deprecated.*")
 from src.model.config import BanglaGSGConfig
 from src.model.model import BanglaGSGModel
 from src.model.optim import build_optimizers, load_optimizer_config
-from src.data.collator import build_dataloader
+from functools import partial
+from src.data.collator import build_dataloader, build_dataset, make_epoch_loader
 from src.training.trainer import Trainer, TrainerConfig
 from src.training.scheduler import build_schedulers
 from src.utils.seed import set_seed
@@ -128,14 +129,25 @@ def main():
     num_workers = data_config.get("num_workers", 2)
     max_shards = data_config.get("max_shards", 0)
 
-    train_loader = build_dataloader(
-        npy_dir=train_npy_dir,
+    # Dataset (memory-mapped shards) is built once and reused across epochs.
+    # The actual shuffle order is produced per-epoch by make_epoch_loader
+    # below, seeded with (args.seed + epoch) — this preserves full random
+    # shuffling (a fresh, different permutation every epoch) while making
+    # each epoch's order exactly reproducible across process restarts, so
+    # resume can fast-forward to precisely where it left off with no
+    # duplicated or skipped sequences.
+    train_dataset = build_dataset(npy_dir=train_npy_dir, max_shards=max_shards)
+
+    train_loader_fn = partial(
+        make_epoch_loader,
+        train_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
         shuffle=True,  # CRITICAL: Must be True to mix Bangla, English, and NMT in every batch!
         pin_memory=True,
-        max_shards=max_shards,
+        base_seed=args.seed,
     )
+    train_loader = train_loader_fn(epoch=0)
 
     eval_loader = None
     if eval_npy_dir:
@@ -197,7 +209,9 @@ def main():
         config=trainer_config,
         model_config=model_config,
         device=device,
+        train_loader_fn=train_loader_fn,
     )
+    trainer.data_seed = args.seed
 
     # ── Resume if requested ───────────────────────────────────────────────
     if args.resume or args.resume_path:

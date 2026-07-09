@@ -5,9 +5,9 @@ Reports total tokens, tokens per doc/sequence stats, and overall token count.
 Writes a YAML report to saved/reports/.
 
 Usage:
-  python util/count_tokens.py saved/data/cleaned/bangla.jsonl
-  python util/count_tokens.py saved/data/pretokenized/bangla/train/ --format npy
-  python util/count_tokens.py saved/data/cleaned/ --format parquet
+  python utils/count_tokens.py saved/data/cleaned/bangla.jsonl
+  python utils/count_tokens.py saved/data/pretokenized/bangla/train/ --format npy
+  python utils/count_tokens.py saved/data/cleaned/ --format parquet
 """
 
 from __future__ import annotations

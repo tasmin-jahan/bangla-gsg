@@ -3,8 +3,6 @@ Checkpoint management for BanglaGSG.
 
 Handles save/load of dual optimizer states (Muon + AdamW),
 both schedulers, RNG state, and training progress.
-
-Spec §7: Keep last N + best-by-validation-perplexity.
 """
 
 import os
@@ -27,6 +25,9 @@ def save_checkpoint(
     train_loss: float,
     val_perplexity: Optional[float] = None,
     config: Optional[dict] = None,
+    epoch: int = 0,
+    batches_consumed_this_epoch: int = 0,
+    data_seed: Optional[int] = None,
 ):
     """
     Save a complete training checkpoint with dual optimizer states.
@@ -43,6 +44,16 @@ def save_checkpoint(
         train_loss: Current training loss.
         val_perplexity: Validation perplexity (if computed).
         config: Model config dict (for reproducibility).
+        epoch: Current epoch index (0-based). Required to rebuild the
+            correct epoch-seeded shuffle order on resume.
+        batches_consumed_this_epoch: Micro-batches consumed so far in
+            `epoch`, at the current shuffle order. Required for exact
+            fast-forward on resume (no duplication, no skipped data).
+        data_seed: The base_seed used to build the training dataloader's
+            per-epoch sampler (base_seed + epoch). Saved for sanity
+            verification on resume — if the loader is rebuilt with a
+            different base seed, fast-forwarding would silently replay
+            the wrong permutation.
     """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -59,10 +70,14 @@ def save_checkpoint(
         "config": config,
         "rng_state": torch.get_rng_state(),
         "cuda_rng_state": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
+        "epoch": epoch,
+        "batches_consumed_this_epoch": batches_consumed_this_epoch,
+        "data_seed": data_seed,
     }
 
     torch.save(checkpoint, path)
-    tqdm.write(f"[Checkpoint] Saved step {step} → {path}")
+    tqdm.write(f"[Checkpoint] Saved step {step} (epoch {epoch}, "
+               f"batch {batches_consumed_this_epoch} in epoch) → {path}")
 
 
 def load_checkpoint(
@@ -92,7 +107,9 @@ def load_checkpoint(
     if checkpoint.get("cuda_rng_state") is not None and torch.cuda.is_available():
         torch.cuda.set_rng_state(checkpoint["cuda_rng_state"].cpu())
 
-    print(f"[Checkpoint] Resumed from step {checkpoint['step']} ← {path}")
+    print(f"[Checkpoint] Resumed from step {checkpoint['step']} "
+          f"(epoch {checkpoint.get('epoch', 0)}, "
+          f"batch {checkpoint.get('batches_consumed_this_epoch', 0)} in epoch) ← {path}")
     return checkpoint
 
 

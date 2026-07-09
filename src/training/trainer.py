@@ -92,6 +92,7 @@ class Trainer:
         config: TrainerConfig = None,
         model_config=None,
         device: str = "cuda",
+        train_loader_fn=None,
     ):
         self.model = model
         self.muon_optimizer = muon_optimizer
@@ -104,6 +105,22 @@ class Trainer:
         self.model_config = model_config
         self.device = device
         self._interrupt_requested = False
+
+        # train_loader_fn(epoch) -> DataLoader, used to rebuild the training
+        # loader with the correct epoch-seeded shuffle order on resume and
+        # at epoch boundaries. If not provided, the loader passed in above
+        # is reused for every epoch (no per-epoch reshuffling / no exact
+        # resume guarantee — only leave this None for eval-only use).
+        self.train_loader_fn = train_loader_fn
+        self.epoch = 0
+        # Micro-batches (pre-accumulation) consumed so far in the current
+        # epoch. Tracked at micro-batch granularity (not optimizer-step
+        # granularity) so fast-forward-on-resume is exact even mid-accumulation.
+        self.batches_consumed_this_epoch = 0
+        # Base seed used by train_loader_fn to derive each epoch's shuffle
+        # order (base_seed + epoch). Set by the caller (see src/train.py)
+        # so resume() can sanity-check it against the checkpoint.
+        self.data_seed = None
 
         # Speed optimizations (TF32)
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -257,6 +274,17 @@ class Trainer:
         self.global_step = ckpt["step"]
         self.tokens_seen = ckpt.get("tokens_seen", 0)
         self.best_val_ppl = ckpt.get("val_perplexity", float("inf"))
+        self.epoch = ckpt.get("epoch", 0)
+        self.batches_consumed_this_epoch = ckpt.get("batches_consumed_this_epoch", 0)
+
+        ckpt_seed = ckpt.get("data_seed")
+        if ckpt_seed is not None and self.data_seed is not None and ckpt_seed != self.data_seed:
+            print(f"[Trainer] WARNING: checkpoint was trained with data_seed="
+                  f"{ckpt_seed}, but this run is using data_seed={self.data_seed}. "
+                  f"Fast-forward-on-resume will NOT replay the correct shuffle "
+                  f"order — you will get duplicated/skipped data this epoch. "
+                  f"Fix by passing --seed {ckpt_seed} (or matching data_seed) "
+                  f"to this run.")
 
     def train(self):
         """Run the full training loop."""
@@ -274,18 +302,25 @@ class Trainer:
         running_z = 0.0
         step_start = time.time()
 
-        # Fast-forward dataloader to prevent duplicate sequences on resume
-        batches_to_skip = self.global_step * accum
+        # Build (or rebuild) the loader for the current epoch with its
+        # deterministic, epoch-seeded shuffle order, then fast-forward
+        # WITHIN that epoch only, by the exact number of micro-batches
+        # already consumed. Because the shuffle order for (base_seed,
+        # epoch) is reproducible, this lands exactly on the next unseen
+        # batch: no duplicates, no skipped/unseen sequences.
+        if self.train_loader_fn is not None:
+            self.train_loader = self.train_loader_fn(self.epoch)
+
         data_iter = iter(self.train_loader)
-        
+        batches_to_skip = self.batches_consumed_this_epoch
+
         if batches_to_skip > 0:
-            print(f"[Trainer] Fast-forwarding dataloader by {batches_to_skip} batches...")
+            print(f"[Trainer] Resuming epoch {self.epoch}: fast-forwarding "
+                  f"dataloader by {batches_to_skip} batches (exact replay of "
+                  f"this epoch's shuffle order)...")
             for _ in range(batches_to_skip):
-                try:
-                    next(data_iter)
-                except StopIteration:
-                    data_iter = iter(self.train_loader)
-                    next(data_iter)
+                next(data_iter)  # must not wrap here — wrapping would mean
+                                  # we mis-tracked batches_consumed_this_epoch
             print("[Trainer] Dataloader fast-forward complete.")
 
         session_start = time.time()
@@ -314,8 +349,21 @@ class Trainer:
             try:
                 batch = next(data_iter)
             except StopIteration:
+                # Epoch boundary: advance to the next epoch's deterministic
+                # shuffle order (base_seed + epoch), not a re-shuffle of the
+                # same epoch. Reset the in-epoch counter so a resume that
+                # lands right after this point fast-forwards correctly
+                # against the *new* epoch's permutation.
+                self.epoch += 1
+                self.batches_consumed_this_epoch = 0
+                if self.train_loader_fn is not None:
+                    self.train_loader = self.train_loader_fn(self.epoch)
+                tqdm.write(f"[Trainer] Epoch {self.epoch - 1} complete. "
+                           f"Starting epoch {self.epoch} (new shuffle order).")
                 data_iter = iter(self.train_loader)
                 batch = next(data_iter)
+
+            self.batches_consumed_this_epoch += 1
 
             input_ids = batch["input_ids"].to(self.device)
             targets = input_ids[:, 1:].contiguous()
@@ -450,6 +498,9 @@ class Trainer:
                         self.global_step, self.tokens_seen,
                         avg_loss,
                         config=self.model_config.__dict__ if self.model_config else None,
+                        epoch=self.epoch,
+                        batches_consumed_this_epoch=self.batches_consumed_this_epoch,
+                        data_seed=self.data_seed,
                     )
                     manage_checkpoints(
                         self.config.checkpoint_dir,
@@ -467,6 +518,9 @@ class Trainer:
                         self.global_step, self.tokens_seen,
                         running_loss / max(accum, 1) if running_loss > 0 else 0.0,
                         config=self.model_config.__dict__ if self.model_config else None,
+                        epoch=self.epoch,
+                        batches_consumed_this_epoch=self.batches_consumed_this_epoch,
+                        data_seed=self.data_seed,
                     )
                     manage_checkpoints(
                         self.config.checkpoint_dir,
