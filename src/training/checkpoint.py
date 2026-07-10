@@ -3,6 +3,12 @@ Checkpoint management for BanglaGSG.
 
 Handles save/load of dual optimizer states (Muon + AdamW),
 both schedulers, RNG state, and training progress.
+
+Features:
+  - Atomic saves (write to .tmp then os.replace) — no corrupted files on power loss
+  - Epoch + batches_consumed tracking for deterministic resume
+  - Wall-clock persistence for accurate elapsed time across restarts
+  - Model export (weights + config only, no optimizer bloat)
 """
 
 import os
@@ -10,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 import torch
+import yaml
 from tqdm import tqdm
 
 
@@ -28,6 +35,7 @@ def save_checkpoint(
     epoch: int = 0,
     batches_consumed_this_epoch: int = 0,
     data_seed: Optional[int] = None,
+    wall_clock: float = 0.0,
 ):
     """
     Save a complete training checkpoint with dual optimizer states.
@@ -54,6 +62,9 @@ def save_checkpoint(
             verification on resume — if the loader is rebuilt with a
             different base seed, fast-forwarding would silently replay
             the wrong permutation.
+        wall_clock: Cumulative wall-clock seconds of actual training
+            across all sessions. Used to restore accurate elapsed time
+            on resume.
     """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -73,9 +84,15 @@ def save_checkpoint(
         "epoch": epoch,
         "batches_consumed_this_epoch": batches_consumed_this_epoch,
         "data_seed": data_seed,
+        "wall_clock": wall_clock,
     }
 
-    torch.save(checkpoint, path)
+    # Atomic save: write to tmp then rename — prevents corrupted
+    # checkpoints if power is lost mid-write.
+    tmp_path = path + ".tmp"
+    torch.save(checkpoint, tmp_path)
+    os.replace(tmp_path, path)
+
     tqdm.write(f"[Checkpoint] Saved step {step} (epoch {epoch}, "
                f"batch {batches_consumed_this_epoch} in epoch) → {path}")
 
@@ -143,3 +160,42 @@ def manage_checkpoints(
     for ckpt in ckpts:
         if ckpt.resolve() not in protected:
             ckpt.unlink()
+
+
+def export_model(
+    model: torch.nn.Module,
+    config: dict,
+    model_dir: str,
+    run_name: str = "default",
+) -> str:
+    """
+    Export the final trained model (weights + config only, no optimizer state).
+
+    This produces a stripped-down version suitable for HuggingFace upload:
+      - model.pt: just the state_dict (no optimizer, scheduler, RNG state)
+      - config.yaml: model architecture config for reconstruction
+
+    Args:
+        model: The trained model.
+        config: Model config dict.
+        model_dir: Base directory for model exports.
+        run_name: Run identifier (subdirectory name).
+
+    Returns:
+        Path to the export directory.
+    """
+    export_dir = Path(model_dir) / run_name
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save model weights only
+    model_path = export_dir / "model.pt"
+    torch.save(model.state_dict(), str(model_path))
+
+    # Save config for reconstruction
+    config_path = export_dir / "config.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
+
+    tqdm.write(f"[Export] Model exported to {export_dir}/ "
+               f"(model.pt + config.yaml, no optimizer state)")
+    return str(export_dir)

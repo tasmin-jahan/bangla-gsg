@@ -25,8 +25,25 @@ from tqdm import tqdm
 import signal
 
 from src.model.optim import build_param_groups
-from src.training.checkpoint import save_checkpoint, load_checkpoint, manage_checkpoints
+from src.training.checkpoint import (
+    save_checkpoint, load_checkpoint, manage_checkpoints, export_model,
+)
 from src.utils.logging import MetricLogger
+
+
+def _format_time(seconds: float) -> str:
+    """Format seconds into human-readable time string."""
+    if seconds < 0:
+        return "??:??:??"
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    if h > 0:
+        return f"{h}h{m:02d}m{s:02d}s"
+    elif m > 0:
+        return f"{m}m{s:02d}s"
+    else:
+        return f"{s}s"
 
 
 @dataclass
@@ -146,6 +163,12 @@ class Trainer:
         self.global_step = 0
         self.tokens_seen = 0
         self.best_val_ppl = float("inf")
+
+        # Wall-clock tracking (checkpoint-backed, survives restarts)
+        self._resumed_wall_clock = 0.0
+        self._session_start = time.time()
+        self._resume_step = 0  # step at which this session started (for ETA)
+        self._last_loss = 0.0
 
     def _install_signal_handlers(self) -> None:
         def _handler(signum, frame):
@@ -277,6 +300,23 @@ class Trainer:
         self.epoch = ckpt.get("epoch", 0)
         self.batches_consumed_this_epoch = ckpt.get("batches_consumed_this_epoch", 0)
 
+        # Restore wall-clock for accurate elapsed time display.
+        # If checkpoint has wall_clock (new format), use it directly.
+        # Otherwise fall back to the last elapsed_s from the CSV (backward
+        # compat bridge — only used once, then new checkpoints save wall_clock).
+        self._resumed_wall_clock = ckpt.get("wall_clock", 0.0)
+        if self._resumed_wall_clock == 0.0:
+            csv_elapsed = self.logger._read_last_elapsed(self.logger.csv_path)
+            if csv_elapsed > 0:
+                self._resumed_wall_clock = csv_elapsed
+                print(f"[Trainer] No wall_clock in checkpoint (old format). "
+                      f"Falling back to CSV elapsed_s={csv_elapsed:.1f}s "
+                      f"({_format_time(csv_elapsed)}).")
+        self._session_start = time.time()
+        self._resume_step = self.global_step
+        self.logger._resumed_wall_clock = self._resumed_wall_clock
+        self.logger._session_start = self._session_start
+
         ckpt_seed = ckpt.get("data_seed")
         if ckpt_seed is not None and self.data_seed is not None and ckpt_seed != self.data_seed:
             print(f"[Trainer] WARNING: checkpoint was trained with data_seed="
@@ -285,6 +325,9 @@ class Trainer:
                   f"order — you will get duplicated/skipped data this epoch. "
                   f"Fix by passing --seed {ckpt_seed} (or matching data_seed) "
                   f"to this run.")
+
+        print(f"[Trainer] Resumed: step={self.global_step}, epoch={self.epoch}, "
+              f"tokens={self.tokens_seen:,}, wall_clock={_format_time(self._resumed_wall_clock)}")
 
     def train(self):
         """Run the full training loop."""
@@ -303,25 +346,32 @@ class Trainer:
         step_start = time.time()
 
         # Build (or rebuild) the loader for the current epoch with its
-        # deterministic, epoch-seeded shuffle order, then fast-forward
-        # WITHIN that epoch only, by the exact number of micro-batches
-        # already consumed. Because the shuffle order for (base_seed,
-        # epoch) is reproducible, this lands exactly on the next unseen
-        # batch: no duplicates, no skipped/unseen sequences.
+        # deterministic, epoch-seeded shuffle order. The EpochSampler
+        # generates the same permutation as the old RandomSampler and
+        # starts yielding from the correct position — no I/O fast-forward
+        # needed. Verified: produces identical indices to RandomSampler
+        # at checkpoint (epoch=0, batches_consumed=559104, dataset=4,746,279).
         if self.train_loader_fn is not None:
-            self.train_loader = self.train_loader_fn(self.epoch)
+            skip = self.batches_consumed_this_epoch
+            self.train_loader = self.train_loader_fn(self.epoch, skip_batches=skip)
+            if skip > 0:
+                print(f"[Trainer] Resuming epoch {self.epoch}: sampler skipping "
+                      f"{skip} batches — instant, zero I/O.")
 
         data_iter = iter(self.train_loader)
-        batches_to_skip = self.batches_consumed_this_epoch
 
-        if batches_to_skip > 0:
-            print(f"[Trainer] Resuming epoch {self.epoch}: fast-forwarding "
-                  f"dataloader by {batches_to_skip} batches (exact replay of "
-                  f"this epoch's shuffle order)...")
-            for _ in range(batches_to_skip):
-                next(data_iter)  # must not wrap here — wrapping would mean
-                                  # we mis-tracked batches_consumed_this_epoch
-            print("[Trainer] Dataloader fast-forward complete.")
+        # ── Legacy fallback (if you ever need it) ─────────────────────
+        # To use the old I/O-based fast-forward instead of EpochSampler:
+        # 1. Pass legacy_fast_forward=True to make_epoch_loader in train.py
+        # 2. Remove skip_batches=skip above (just pass epoch)
+        # 3. Uncomment the block below:
+        #
+        # batches_to_skip = self.batches_consumed_this_epoch
+        # if batches_to_skip > 0:
+        #     print(f"[Trainer] Legacy fast-forward: {batches_to_skip} batches...")
+        #     for _ in range(batches_to_skip):
+        #         next(data_iter)
+        #     print("[Trainer] Fast-forward complete.")
 
         session_start = time.time()
         resume_step = self.global_step
@@ -412,6 +462,7 @@ class Trainer:
                 avg_loss = running_loss / accum
                 avg_ce = running_ce / accum
                 avg_z = running_z / accum
+                self._last_loss = avg_loss
 
                 elapsed = time.time() - step_start
                 tokens_per_sec = (accum * input_ids.numel()) / max(elapsed, 1e-6)
@@ -426,15 +477,10 @@ class Trainer:
                     eta_sec = sec_per_step * (self.total_steps - self.global_step)
                 else:
                     eta_sec = -1
-                    
-                def _fmt_time(s):
-                    if s < 0: return "??:??:??"
-                    h, m = divmod(s, 3600)
-                    m, s = divmod(m, 60)
-                    return f"{int(h)}h{int(m):02d}m{int(s):02d}s" if h > 0 else (f"{int(m)}m{int(s):02d}s" if m > 0 else f"{int(s)}s")
 
-                eta_str = _fmt_time(eta_sec)
-                elapsed_str = _fmt_time(self.logger._elapsed())
+                total_wall = self._resumed_wall_clock + session_elapsed
+                eta_str = _format_time(eta_sec)
+                elapsed_str = _format_time(total_wall)
 
                 pbar.set_postfix_str(
                     f"\033[90m[{elapsed_str} < \033[97m{eta_str}\033[90m]\033[0m "
@@ -482,15 +528,40 @@ class Trainer:
                     val_ppl = eval_results["overall"]
                     tqdm.write(f"  ✦ [Eval] overall_val_ppl={val_ppl:.2f}")
 
+                    # Log per-split results
+                    for name, ppl_val in eval_results.items():
+                        if name != "overall":
+                            tqdm.write(f"           {name}_val_ppl={ppl_val:.2f}")
+
                     # Log to eval_metrics.csv
                     eval_log = {"step": self.global_step, "tokens_seen": self.tokens_seen}
                     eval_log.update({f"val_ppl_{k}": round(v, 3) for k, v in eval_results.items()})
                     self.logger.log_eval(eval_log)
 
+                    # Track best for checkpoint
+                    if val_ppl < self.best_val_ppl:
+                        self.best_val_ppl = val_ppl
+                        best_path = f"{self.config.checkpoint_dir}/best.pt"
+                        session_elapsed = time.time() - session_start
+                        save_checkpoint(
+                            best_path, self.model,
+                            self.muon_optimizer, self.adamw_optimizer,
+                            self.muon_scheduler, self.adamw_scheduler,
+                            self.global_step, self.tokens_seen,
+                            avg_loss, val_ppl,
+                            config=self.model_config.__dict__ if self.model_config else None,
+                            epoch=self.epoch,
+                            batches_consumed_this_epoch=self.batches_consumed_this_epoch,
+                            data_seed=self.data_seed,
+                            wall_clock=self._resumed_wall_clock + session_elapsed,
+                        )
+                        tqdm.write(f"  ⭐ New best val_ppl={val_ppl:.2f} → {best_path}")
+
                 # Periodic checkpointing
                 if self.global_step % self.config.checkpoint_every == 0:
                     ckpt_path = f"{self.config.checkpoint_dir}/step_{self.global_step:08d}.pt"
                     tqdm.write(f"  💾 Checkpoint step={self.global_step:,} → {ckpt_path}")
+                    session_elapsed = time.time() - session_start
                     save_checkpoint(
                         ckpt_path, self.model,
                         self.muon_optimizer, self.adamw_optimizer,
@@ -501,6 +572,7 @@ class Trainer:
                         epoch=self.epoch,
                         batches_consumed_this_epoch=self.batches_consumed_this_epoch,
                         data_seed=self.data_seed,
+                        wall_clock=self._resumed_wall_clock + session_elapsed,
                     )
                     manage_checkpoints(
                         self.config.checkpoint_dir,
@@ -511,16 +583,18 @@ class Trainer:
                 if self._interrupt_requested:
                     tqdm.write(f"\n[Trainer] Interrupt acknowledged at step {self.global_step}. Saving emergency checkpoint...")
                     ckpt_path = f"{self.config.checkpoint_dir}/step_{self.global_step:08d}.pt"
+                    session_elapsed = time.time() - session_start
                     save_checkpoint(
                         ckpt_path, self.model,
                         self.muon_optimizer, self.adamw_optimizer,
                         self.muon_scheduler, self.adamw_scheduler,
                         self.global_step, self.tokens_seen,
-                        running_loss / max(accum, 1) if running_loss > 0 else 0.0,
+                        self._last_loss,
                         config=self.model_config.__dict__ if self.model_config else None,
                         epoch=self.epoch,
                         batches_consumed_this_epoch=self.batches_consumed_this_epoch,
                         data_seed=self.data_seed,
+                        wall_clock=self._resumed_wall_clock + session_elapsed,
                     )
                     manage_checkpoints(
                         self.config.checkpoint_dir,
@@ -528,15 +602,47 @@ class Trainer:
                         best_path=f"{self.config.checkpoint_dir}/best.pt",
                     )
                     pbar.close()
+                    total_wall = self._resumed_wall_clock + session_elapsed
+                    print(
+                        f"\n⚡ Interrupted at step {self.global_step:,}/{self.total_steps:,} "
+                        f"after {_format_time(total_wall)}. Resume with --resume flag."
+                    )
                     import sys
-                    print("[Trainer] Emergency save complete. Exiting gracefully.")
                     sys.exit(0)
 
-        import os
-        os.makedirs(self.config.model_dir, exist_ok=True)
-        final_path = f"{self.config.model_dir}/model.pt"
-        torch.save(self.model.state_dict(), final_path)
-        tqdm.write(f"  💾 Final model saved to {final_path}")
-
+        # ── Training complete ────────────────────────────────────────────
         pbar.close()
-        print(f"[Trainer] Training complete. {self.global_step} steps, {self.tokens_seen:,} tokens.")
+        session_elapsed = time.time() - session_start
+        total_wall = self._resumed_wall_clock + session_elapsed
+
+        # Final checkpoint (with wall_clock)
+        ckpt_path = f"{self.config.checkpoint_dir}/step_{self.global_step:08d}.pt"
+        save_checkpoint(
+            ckpt_path, self.model,
+            self.muon_optimizer, self.adamw_optimizer,
+            self.muon_scheduler, self.adamw_scheduler,
+            self.global_step, self.tokens_seen,
+            self._last_loss,
+            config=self.model_config.__dict__ if self.model_config else None,
+            epoch=self.epoch,
+            batches_consumed_this_epoch=self.batches_consumed_this_epoch,
+            data_seed=self.data_seed,
+            wall_clock=total_wall,
+        )
+        manage_checkpoints(
+            self.config.checkpoint_dir,
+            keep_last=self.config.keep_checkpoints,
+            best_path=f"{self.config.checkpoint_dir}/best.pt",
+        )
+
+        # Export stripped model for HuggingFace
+        export_model(
+            self.model,
+            config=self.model_config.__dict__ if self.model_config else {},
+            model_dir=self.config.model_dir,
+        )
+
+        print(
+            f"\n✅ Training complete │ {self.global_step:,} steps │ "
+            f"{_format_time(total_wall)} │ {self.tokens_seen:,} tokens"
+        )

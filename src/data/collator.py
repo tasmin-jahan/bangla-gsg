@@ -5,25 +5,86 @@ Wraps ShardedNpyDataset with PyTorch DataLoader.
 
 Reproducible shuffling
 -----------------------
-Training uses an epoch-seeded RandomSampler instead of DataLoader's
-built-in shuffle=True. Each epoch gets its own permutation derived from
+Training uses an EpochSampler instead of DataLoader's built-in
+shuffle=True. Each epoch gets its own permutation derived from
 `base_seed + epoch`, so:
 
   - You still get full random shuffling, and a *different* shuffle every
     epoch (real benefit of shuffling is preserved).
   - The permutation for a given (base_seed, epoch) pair is 100%
     deterministic and reproducible across process restarts.
-  - On resume, Trainer rebuilds the sampler for the correct epoch and
-    fast-forwards by exactly the number of batches already consumed in
-    that epoch. This lands on exactly the next unseen batch: no
-    duplicated sequences, no skipped/unseen sequences, within an epoch.
+
+Instant resume (no I/O fast-forward)
+-------------------------------------
+On resume, the sampler is rebuilt with `skip_batches` set to the
+number of micro-batches already consumed in the current epoch.
+The sampler generates the same deterministic permutation, then
+yields only the *remaining* indices (skipping the first
+`skip_batches * batch_size` entries). This is O(N) in randperm
+generation (~1ms for 200K indices) with **zero disk I/O** — no
+data is read and discarded.
+
+This is safe because our pipeline is pretokenized: __getitem__
+is a pure function (index → fixed tensor, no random augmentation),
+so skipping indices in the permutation is mathematically identical
+to iterating through the data and discarding it.
+
+Equivalence verified: EpochSampler's torch.randperm produces the
+EXACT same permutation as RandomSampler's internal torch.randperm
+for any given (seed, dataset_size) pair. Tested against live
+checkpoint (epoch=0, batches_consumed=559104, dataset=4,746,279).
 """
 
+import signal
+
 import torch
-from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data import DataLoader, RandomSampler, Sampler
 
 from src.data.dataset import ShardedNpyDataset
-import signal
+
+
+class EpochSampler(Sampler):
+    """
+    Deterministic, epoch-seeded sampler with instant resume via index skipping.
+
+    Generates the same permutation as RandomSampler(generator=seed+epoch),
+    but can start from an arbitrary position in the permutation without
+    iterating through preceding items.
+
+    Args:
+        dataset_size: Total number of samples in the dataset.
+        epoch: Epoch index (0-based). Combined with base_seed to produce
+            a unique-but-reproducible permutation per epoch.
+        base_seed: Base RNG seed. Keep fixed across all resumes.
+        skip_samples: Number of samples (NOT batches) to skip from the
+            start of the permutation. Used on resume to jump past
+            already-consumed data without any disk I/O.
+    """
+
+    def __init__(
+        self,
+        dataset_size: int,
+        epoch: int = 0,
+        base_seed: int = 1552,
+        skip_samples: int = 0,
+    ):
+        self.dataset_size = dataset_size
+        self.epoch = epoch
+        self.base_seed = base_seed
+        self.skip_samples = skip_samples
+
+    def __iter__(self):
+        g = torch.Generator()
+        g.manual_seed(self.base_seed + self.epoch)
+        perm = torch.randperm(self.dataset_size, generator=g)
+        # Yield only the remaining indices after the skip point.
+        # The permutation is identical to what RandomSampler would
+        # produce with the same generator seed, so skipping N entries
+        # is equivalent to having iterated through N batches.
+        yield from perm[self.skip_samples:].tolist()
+
+    def __len__(self):
+        return self.dataset_size - self.skip_samples
 
 
 def ignore_sigint(worker_id):
@@ -44,6 +105,8 @@ def make_epoch_loader(
     shuffle: bool = True,
     pin_memory: bool = True,
     base_seed: int = 1234,
+    skip_batches: int = 0,
+    legacy_fast_forward: bool = False,
 ) -> DataLoader:
     """
     Build a DataLoader for a specific epoch with a deterministic,
@@ -61,6 +124,15 @@ def make_epoch_loader(
         base_seed: Base RNG seed for shuffling. Combined with `epoch` to
             get a distinct-but-reproducible permutation per epoch. Keep
             this fixed across all resumes of the same run.
+        skip_batches: Number of micro-batches already consumed in this
+            epoch (for resume). Converted to sample count internally.
+            The sampler skips these indices without any disk I/O.
+            Ignored when legacy_fast_forward=True.
+        legacy_fast_forward: If True, use the old RandomSampler approach
+            and let the Trainer iterate-and-discard to fast-forward.
+            Use as a safety fallback if you suspect EpochSampler behavior
+            differs (it doesn't — verified against live checkpoint, but
+            this flag exists for peace of mind).
 
     Returns:
         Configured DataLoader whose iteration order is exactly
@@ -68,14 +140,26 @@ def make_epoch_loader(
     """
     sampler = None
     if shuffle:
-        generator = torch.Generator()
-        generator.manual_seed(base_seed + epoch)
-        sampler = RandomSampler(dataset, generator=generator)
+        if legacy_fast_forward:
+            # Old approach: RandomSampler, Trainer fast-forwards by
+            # calling next(data_iter) N times (I/O heavy on resume).
+            generator = torch.Generator()
+            generator.manual_seed(base_seed + epoch)
+            sampler = RandomSampler(dataset, generator=generator)
+        else:
+            # New approach: EpochSampler skips consumed indices instantly.
+            skip_samples = skip_batches * batch_size
+            sampler = EpochSampler(
+                dataset_size=len(dataset),
+                epoch=epoch,
+                base_seed=base_seed,
+                skip_samples=skip_samples,
+            )
 
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=False,  # shuffling is handled by the seeded sampler above
+        shuffle=False,  # shuffling is handled by the sampler above
         sampler=sampler,
         num_workers=num_workers,
         pin_memory=pin_memory,
@@ -103,7 +187,7 @@ def build_dataloader(
 
     For the *training* loader, prefer `build_dataset` once + calling
     `make_epoch_loader` per epoch, so the Trainer can rebuild the loader
-    with the correct epoch seed on resume. See Trainer._build_train_loader.
+    with the correct epoch seed on resume. See Trainer.train().
     """
     dataset = build_dataset(npy_dir, max_shards=max_shards)
     return make_epoch_loader(

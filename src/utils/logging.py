@@ -3,6 +3,10 @@ Metric logging utilities for BanglaGSG.
 
 Simple CSV-based logging for training metrics. Lightweight, no external
 dependencies (no wandb/tensorboard required, though can be added later).
+
+Resume-safe: appends to existing CSVs and continues elapsed_s from
+the checkpoint-backed wall clock (with CSV fallback for backward
+compatibility with checkpoints that don't have wall_clock yet).
 """
 
 import csv
@@ -13,11 +17,11 @@ from typing import Dict, Optional
 
 class MetricLogger:
     """
-    Logs training metrics to CSV and stdout.
+    Logs training metrics to CSV.
 
     Creates a CSV file with columns for step, tokens_seen, loss, lr,
     gradient norms, etc. Safe to resume: appends to existing CSVs and
-    continues elapsed_s from the last logged value.
+    continues elapsed_s from the checkpoint-backed wall clock.
     """
 
     def __init__(self, log_dir: str, run_name: str = "default"):
@@ -27,9 +31,10 @@ class MetricLogger:
         self._csv_initialized = False
         self._fieldnames: list = []
 
-        # Resume elapsed time from last logged row so timestamps don't
-        # reset to 0 on every restart.
-        self._elapsed_offset = self._read_last_elapsed(self.csv_path)
+        # Wall-clock tracking: the Trainer sets _resumed_wall_clock from
+        # the checkpoint. If the checkpoint is old (no wall_clock key),
+        # the Trainer falls back to _read_last_elapsed() from the CSV.
+        self._resumed_wall_clock = 0.0
         self._session_start = time.time()
 
     # ------------------------------------------------------------------
@@ -37,7 +42,12 @@ class MetricLogger:
     # ------------------------------------------------------------------
 
     def _read_last_elapsed(self, path: Path) -> float:
-        """Return the last elapsed_s value in an existing CSV, or 0."""
+        """Return the last elapsed_s value in an existing CSV, or 0.
+
+        Used as a fallback for backward compatibility with checkpoints
+        that don't have wall_clock saved yet. Once the first new-format
+        checkpoint is saved, this fallback is never needed again.
+        """
         if not path.exists() or path.stat().st_size == 0:
             return 0.0
         try:
@@ -50,8 +60,11 @@ class MetricLogger:
         return 0.0
 
     def _elapsed(self) -> float:
-        """Wall-clock seconds since first run began (survives restarts)."""
-        return round(self._elapsed_offset + (time.time() - self._session_start), 1)
+        """Wall-clock seconds since first run began (survives restarts).
+
+        Uses checkpoint-backed _resumed_wall_clock + current session time.
+        """
+        return round(self._resumed_wall_clock + (time.time() - self._session_start), 1)
 
     def _init_csv(self, fieldnames: list):
         """
@@ -122,30 +135,3 @@ class MetricLogger:
                 restval="",          # missing keys → empty cell, not error
             )
             writer.writerow(metrics)
-
-    def log_stdout(
-        self,
-        step: int,
-        total_steps: int,
-        loss: float,
-        lr_muon: float,
-        lr_adamw: float,
-        tokens_per_sec: Optional[float] = None,
-        grad_norm_muon: Optional[float] = None,
-        grad_norm_adamw: Optional[float] = None,
-    ):
-        """Print a formatted training progress line."""
-        parts = [
-            f"step {step:>6d}/{total_steps}",
-            f"loss={loss:.4f}",
-            f"lr_muon={lr_muon:.2e}",
-            f"lr_adamw={lr_adamw:.2e}",
-        ]
-        if tokens_per_sec is not None:
-            parts.append(f"tok/s={tokens_per_sec:.0f}")
-        if grad_norm_muon is not None:
-            parts.append(f"gnorm_muon={grad_norm_muon:.3f}")
-        if grad_norm_adamw is not None:
-            parts.append(f"gnorm_adamw={grad_norm_adamw:.3f}")
-
-        print(f"[Train] {' | '.join(parts)}")
