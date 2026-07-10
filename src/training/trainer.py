@@ -162,7 +162,6 @@ class Trainer:
         # State
         self.global_step = 0
         self.tokens_seen = 0
-        self.best_val_ppl = float("inf")
 
         # Wall-clock tracking (checkpoint-backed, survives restarts)
         self._resumed_wall_clock = 0.0
@@ -296,7 +295,6 @@ class Trainer:
         )
         self.global_step = ckpt["step"]
         self.tokens_seen = ckpt.get("tokens_seen", 0)
-        self.best_val_ppl = ckpt.get("val_perplexity", float("inf"))
         self.epoch = ckpt.get("epoch", 0)
         self.batches_consumed_this_epoch = ckpt.get("batches_consumed_this_epoch", 0)
 
@@ -538,25 +536,6 @@ class Trainer:
                     eval_log.update({f"val_ppl_{k}": round(v, 3) for k, v in eval_results.items()})
                     self.logger.log_eval(eval_log)
 
-                    # Track best for checkpoint
-                    if val_ppl < self.best_val_ppl:
-                        self.best_val_ppl = val_ppl
-                        best_path = f"{self.config.checkpoint_dir}/best.pt"
-                        session_elapsed = time.time() - session_start
-                        save_checkpoint(
-                            best_path, self.model,
-                            self.muon_optimizer, self.adamw_optimizer,
-                            self.muon_scheduler, self.adamw_scheduler,
-                            self.global_step, self.tokens_seen,
-                            avg_loss, val_ppl,
-                            config=self.model_config.__dict__ if self.model_config else None,
-                            epoch=self.epoch,
-                            batches_consumed_this_epoch=self.batches_consumed_this_epoch,
-                            data_seed=self.data_seed,
-                            wall_clock=self._resumed_wall_clock + session_elapsed,
-                        )
-                        tqdm.write(f"  ⭐ New best val_ppl={val_ppl:.2f} → {best_path}")
-
                 # Periodic checkpointing
                 if self.global_step % self.config.checkpoint_every == 0:
                     ckpt_path = f"{self.config.checkpoint_dir}/step_{self.global_step:08d}.pt"
@@ -577,7 +556,6 @@ class Trainer:
                     manage_checkpoints(
                         self.config.checkpoint_dir,
                         keep_last=self.config.keep_checkpoints,
-                        best_path=f"{self.config.checkpoint_dir}/best.pt",
                     )
 
                 if self._interrupt_requested:
@@ -599,7 +577,6 @@ class Trainer:
                     manage_checkpoints(
                         self.config.checkpoint_dir,
                         keep_last=self.config.keep_checkpoints,
-                        best_path=f"{self.config.checkpoint_dir}/best.pt",
                     )
                     pbar.close()
                     total_wall = self._resumed_wall_clock + session_elapsed
@@ -632,7 +609,6 @@ class Trainer:
         manage_checkpoints(
             self.config.checkpoint_dir,
             keep_last=self.config.keep_checkpoints,
-            best_path=f"{self.config.checkpoint_dir}/best.pt",
         )
 
         # Export stripped model for HuggingFace
