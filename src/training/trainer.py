@@ -434,7 +434,7 @@ class Trainer:
                     return f"{int(h)}h{int(m):02d}m{int(s):02d}s" if h > 0 else (f"{int(m)}m{int(s):02d}s" if m > 0 else f"{int(s)}s")
 
                 eta_str = _fmt_time(eta_sec)
-                elapsed_str = _fmt_time(session_elapsed)
+                elapsed_str = _fmt_time(self.logger._elapsed())
 
                 pbar.set_postfix_str(
                     f"\033[90m[{elapsed_str} < \033[97m{eta_str}\033[90m]\033[0m "
