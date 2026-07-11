@@ -13,7 +13,7 @@ accumulation_steps: 64 # effective batch = 64 * batch_size (2) = 128
 z_loss_weight: 1.0e-4 # spec §6.2
 
 # Memory optimizations
-gradient_checkpointing: true # spec §5.4
+gradient_checkpointing: false # spec §5.4
 compile_model: false # disabled due to ptxas compiler bug on GDN kernels
 
 # Checkpointing (spec §7)
