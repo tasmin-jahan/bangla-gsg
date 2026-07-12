@@ -1,0 +1,197 @@
+generated_at: '2026-07-12T22:11:03.759768'
+format: npy
+files:
+  saved/data/train/01_bn_shard_00000.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/02_bn_shard_00001.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/03_bn_shard_00002.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/04_bn_shard_00003.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/05_bn_shard_00004.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/06_sn_shard_00000.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/07_en_shard_00000.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/08_nmt_shard_00000.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/09_bn_shard_00005.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/10_bn_shard_00006.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/11_bn_shard_00007.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/12_bn_shard_00008.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/13_bn_shard_00009.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/14_sn_shard_00001.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/15_en_shard_00001.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/16_nmt_shard_00001.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/17_bn_shard_00010.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/18_bn_shard_00011.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/19_bn_shard_00012.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/20_bn_shard_00013.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/21_bn_shard_00014.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/22_sn_shard_00002.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/23_en_shard_00002.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/24_nmt_shard_00002.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/25_bn_shard_00015.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/26_bn_shard_00016.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/27_bn_shard_00017.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/28_bn_shard_00018.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/29_bn_shard_00019.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/30_sn_shard_00003.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/31_en_shard_00003.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/32_nmt_shard_00003.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/33_bn_shard_00020.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/34_bn_shard_00021.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/35_bn_shard_00022.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/36_bn_shard_00023.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/37_bn_shard_00024.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/38_sn_shard_00004.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/39_en_shard_00004.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/40_nmt_shard_00004.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/41_bn_shard_00025.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/42_bn_shard_00026.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/43_bn_shard_00027.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/44_bn_shard_00028.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/45_bn_shard_00029.npy:
+    total_tokens: 198479872
+    total_seqs: 96914
+    seq_len: 2048
+  saved/data/train/46_sn_shard_00005.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/47_en_shard_00005.npy:
+    total_tokens: 204800000
+    total_seqs: 100000
+    seq_len: 2048
+  saved/data/train/48_nmt_shard_00005.npy:
+    total_tokens: 5126144
+    total_seqs: 2503
+    seq_len: 2048
+grand_total_tokens: 9624406016
+grand_total_seqs: 4699417

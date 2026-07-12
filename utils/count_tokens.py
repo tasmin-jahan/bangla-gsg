@@ -8,6 +8,8 @@ Usage:
   python utils/count_tokens.py saved/data/cleaned/bangla.jsonl
   python utils/count_tokens.py saved/data/pretokenized/bangla/train/ --format npy
   python utils/count_tokens.py saved/data/cleaned/ --format parquet
+
+  python utils/count_tokens.py saved/data/train --format npy
 """
 
 from __future__ import annotations
