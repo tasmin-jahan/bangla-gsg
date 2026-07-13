@@ -71,13 +71,21 @@ class BanglaGSGBlock(nn.Module):
         x: torch.Tensor,                       # (B, T, d_model)
         positions: torch.Tensor = None,         # (B, T) int64 — needed for swa/gqa
         rope: RotaryEmbedding = None,           # RoPE module — needed for swa/gqa
-    ) -> torch.Tensor:
+        past_key_values=None,
+        use_cache: bool = False,
+    ):
         # ── Mixer ────────────────────────────────────────────────────────
         h = self.norm1(x)
         if self.layer_type in ("swa", "gqa"):
-            h = self.mixer(h, positions=positions, rope=rope)
+            if use_cache:
+                h, past_key_values = self.mixer(h, positions=positions, rope=rope, past_key_value=past_key_values, use_cache=True)
+            else:
+                h = self.mixer(h, positions=positions, rope=rope)
         else:  # gdn
-            h = self.mixer(h)
+            if use_cache:
+                h, past_key_values = self.mixer(h, past_key_values=past_key_values, use_cache=True)
+            else:
+                h = self.mixer(h)
         x = x + h  # residual
 
         # ── FFN ──────────────────────────────────────────────────────────
@@ -88,6 +96,8 @@ class BanglaGSGBlock(nn.Module):
             h = self.ffn(h)
         x = x + h  # residual
 
+        if use_cache:
+            return x, past_key_values
         return x
 
 
@@ -179,7 +189,10 @@ class BanglaGSGModel(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,                # (B, T) int64
-    ) -> torch.Tensor:
+        past_key_values=None,
+        use_cache: bool = False,
+        position_offset: int = 0,
+    ):
         """
         Forward pass.
 
@@ -195,18 +208,86 @@ class BanglaGSGModel(nn.Module):
         # Token embeddings
         x = self.embedding(input_ids)  # (B, T, d_model)
 
-        # Positions: simple 0..T-1 for each sequence
-        positions = torch.arange(T, device=device, dtype=torch.long).unsqueeze(0).expand(B, -1)
+        # Positions: offset + 0..T-1 for each sequence
+        positions = torch.arange(position_offset, position_offset + T, device=device, dtype=torch.long).unsqueeze(0).expand(B, -1)
+
+        gdn_cache = None
+        swa_gqa_cache = None
+        if use_cache:
+            if past_key_values is None:
+                from fla.models.utils import Cache
+                past_key_values = {'gdn': Cache(), 'swa_gqa': [None] * len(self.layers)}
+            gdn_cache = past_key_values.get('gdn')
+            if gdn_cache is None:
+                from fla.models.utils import Cache
+                gdn_cache = Cache()
+            swa_gqa_cache = past_key_values.get('swa_gqa')
+            if swa_gqa_cache is None:
+                swa_gqa_cache = [None] * len(self.layers)
 
         # Pass through all layers
-        for layer in self.layers:
-            x = layer(x, positions=positions, rope=self.rope)
+        for i, layer in enumerate(self.layers):
+            if use_cache:
+                if layer.layer_type in ("swa", "gqa"):
+                    x, swa_gqa_cache[i] = layer(
+                        x, positions=positions, rope=self.rope, 
+                        past_key_values=swa_gqa_cache[i], use_cache=True
+                    )
+                else:
+                    x, gdn_cache = layer(
+                        x, positions=positions, rope=self.rope, 
+                        past_key_values=gdn_cache, use_cache=True
+                    )
+            else:
+                x = layer(x, positions=positions, rope=self.rope)
 
         # Final norm + LM head
         x = self.final_norm(x)
         logits = self.lm_head(x)
 
+        if use_cache:
+            past_key_values = {'gdn': gdn_cache, 'swa_gqa': swa_gqa_cache}
+            return logits, past_key_values
         return logits
+
+    @torch.no_grad()
+    def generate(self, input_ids, max_new_tokens=50, eos_token_id=None, do_sample=False, temperature=1.0):
+        """
+        Single-sequence (batch_size=1) incremental generation using GDN/SWA/GQA caching.
+        Greedy by default (do_sample=False). No batching support.
+        """
+        assert input_ids.shape[0] == 1, "generate() currently only supports batch_size=1"
+
+        # Prefill: run the full prompt through once, building the initial cache
+        logits, past_key_values = self.forward(
+            input_ids, use_cache=True, position_offset=0
+        )
+        # last position's logits determine the first new token
+        next_token_logits = logits[:, -1, :]
+
+        generated = input_ids
+        position = input_ids.shape[1]
+
+        for _ in range(max_new_tokens):
+            if do_sample:
+                probs = torch.softmax(next_token_logits / temperature, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+            else:
+                next_token = next_token_logits.argmax(dim=-1, keepdim=True)
+
+            generated = torch.cat([generated, next_token], dim=1)
+
+            if eos_token_id is not None and next_token.item() == eos_token_id:
+                break
+
+            # Decode step: only the new token goes in, cache carries the rest
+            logits, past_key_values = self.forward(
+                next_token, past_key_values=past_key_values, use_cache=True, position_offset=position
+            )
+            next_token_logits = logits[:, -1, :]
+            position += 1
+
+        return generated
 
     def count_parameters(self) -> dict:
         """Return parameter count breakdown."""

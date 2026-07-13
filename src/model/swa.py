@@ -61,7 +61,9 @@ class SlidingWindowAttention(nn.Module):
         x: torch.Tensor,                       # (B, T, d_model)
         positions: torch.Tensor,                # (B, T) int64
         rope: RotaryEmbedding,                  # RoPE module
-    ) -> torch.Tensor:
+        past_key_value: tuple = None,
+        use_cache: bool = False,
+    ):
         B, T, _ = x.shape
 
         # Project Q, K, V
@@ -77,10 +79,29 @@ class SlidingWindowAttention(nn.Module):
         # Apply RoPE to Q and K only
         q, k = rope(q, k, positions)
 
+        k = k.to(torch.bfloat16)
+        v = v.to(torch.bfloat16)
+
+        if past_key_value is not None:
+            past_k, past_v = past_key_value
+            k = torch.cat([past_k, k], dim=1)  # concatenate along the T (sequence) dimension
+            v = torch.cat([past_v, v], dim=1)
+
+        if use_cache:
+            # Truncate to the most recent window_size tokens — anything older
+            # is outside the attention window and irrelevant to future steps.
+            if k.shape[1] > self.window_size:
+                k_cache = k[:, -self.window_size:]
+                v_cache = v[:, -self.window_size:]
+            else:
+                k_cache = k
+                v_cache = v
+            new_past_key_value = (k_cache, v_cache)
+
         # Flash Attention 2 with sliding window
         # flash_attn_func expects (B, T, H, D) layout — already correct
         attn_output = flash_attn_func(
-            q.to(torch.bfloat16), k.to(torch.bfloat16), v.to(torch.bfloat16),
+            q.to(torch.bfloat16), k, v,
             causal=True,
             window_size=(self.window_size, 0),  # (left_window, right_window=0 for causal)
         )
@@ -88,4 +109,8 @@ class SlidingWindowAttention(nn.Module):
         # (B, T, n_heads, d_head) -> (B, T, n_heads * d_head)
         attn_output = attn_output.contiguous().view(B, T, -1)
 
-        return self.o_proj(attn_output)
+        out = self.o_proj(attn_output)
+
+        if use_cache:
+            return out, new_past_key_value
+        return out
