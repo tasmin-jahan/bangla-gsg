@@ -23,7 +23,7 @@ BanglaGSG is a custom hybrid language model trained from scratch on a mixed corp
 - **Architecture:** Hybrid (GQA + SWA + GDN)
 - **Language(s):** Bengali (Primary), English (Secondary/Translation)
 - **Training Data:** A curated 9.6B token mixture of web-crawled Bengali text, English monolingual data, and high-quality parallel translation pairs. All data underwent rigorous deduplication and strict NFC normalization via the custom `bnunicodenormalizer` pipeline.
-- **Parameters:** ~185M
+- **Parameters:** ~186M
 
 ## Requirements & Setup
 
