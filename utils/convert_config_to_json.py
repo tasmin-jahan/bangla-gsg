@@ -20,7 +20,7 @@ def convert_config(model_dir):
     config_data["auto_map"] = {
         "AutoConfig": "configuration_banglagsg.BanglaGSGConfig",
         "AutoModelForCausalLM": "modeling_banglagsg.BanglaGSGForCausalLM",
-        "AutoTokenizer": [None, "tokenization_banglagsg.BanglaGSGTokenizer"]
+        "AutoTokenizer": "tokenization_banglagsg.BanglaGSGTokenizer"
     }
     
     # Ensure architectures field is present for HF
