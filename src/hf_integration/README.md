@@ -29,9 +29,9 @@ BanglaGSG is a custom hybrid language model trained from scratch on a mixed corp
 
 Because this model relies on a custom architecture and requires strict linguistic normalization, you **must** install the normalizer and enable `trust_remote_code=True` when loading it.
 
-**1. Install the required normalizer:**
+**1. Install the required normalizer and custom architecture dependencies:**
 ```bash
-pip install bnunicodenormalizer
+pip install bnunicodenormalizer flash-attn fla
 ```
 *(If this package is missing, the custom tokenizer will fallback to raw text, which may cause severe hallucinations or degraded performance since the model expects strict NFC normalization).*
 

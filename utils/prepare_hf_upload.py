@@ -35,15 +35,8 @@ def prepare_upload_folder(staging_dir="hf_upload_staging"):
         shutil.copy(hf_int_dir / "README.md", staging / "README.md")
         print(" -> Copied Model Card (README.md)")
         
-    # 4. Copy the src/model/ directory to resolve relative imports (Option B)
-    model_src = Path("src/model")
-    model_dst = staging / "model"
-    shutil.copytree(model_src, model_dst, dirs_exist_ok=True)
-    # Remove pycache if it was copied
-    pycache = model_dst / "__pycache__"
-    if pycache.exists():
-        shutil.rmtree(pycache)
-    print(" -> Copied src/model/ directory")
+    # (Option A) We are flattening the model files instead of copying the directory.
+    # The utils/flatten_hf_model.py script should be run before this staging script.
     
     # 5. Provide exact instructions to the user
     print("\n" + "="*50)
