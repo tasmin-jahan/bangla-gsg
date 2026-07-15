@@ -31,7 +31,7 @@ Because this model relies on a custom architecture and requires strict linguisti
 
 **1. Install the required normalizer and custom architecture dependencies:**
 ```bash
-pip install bnunicodenormalizer flash-attn fla
+pip install bnunicodenormalizer flash-linear-attention
 ```
 *(If this package is missing, the custom tokenizer will fallback to raw text, which may cause severe hallucinations or degraded performance since the model expects strict NFC normalization).*
 
