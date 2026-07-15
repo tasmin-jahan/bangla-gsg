@@ -201,6 +201,8 @@ The data pipeline (in `scripts/`) handles:
 3. **Tokenization**: SentencePiece Unigram tokenizer training
 4. **Packing**: Pretokenized `.npy` shards for efficient training
 
+## Download The Model From [Here.](https://huggingface.co/tasmin-jahan/bangla-gsg)
+
 ## References
 
 - Yang et al., "Gated Delta Networks: Improving Mamba2 with Delta Rule", 2025
