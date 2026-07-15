@@ -48,12 +48,18 @@ class GDNBlock(nn.Module):
             layer_idx=layer_idx,
         )
 
-    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, past_key_values=None, use_cache: bool = False, **kwargs):
         """
         Args:
             x: (B, T, d_model)
         Returns:
             (B, T, d_model)
         """
-        out, _, _ = self.gdn(x)
+        out, _, past_key_values = self.gdn(
+            x,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+        )
+        if use_cache:
+            return out, past_key_values
         return out

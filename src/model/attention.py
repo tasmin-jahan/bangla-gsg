@@ -60,7 +60,9 @@ class GQAttention(nn.Module):
         x: torch.Tensor,                       # (B, T, d_model)
         positions: torch.Tensor,                # (B, T) int64
         rope: RotaryEmbedding,                  # RoPE module
-    ) -> torch.Tensor:
+        past_key_value: tuple = None,
+        use_cache: bool = False,
+    ):
         B, T, _ = x.shape
 
         # Project Q, K, V
@@ -76,14 +78,29 @@ class GQAttention(nn.Module):
         # Apply RoPE to Q and K only
         q, k = rope(q, k, positions)
 
+        k = k.to(torch.bfloat16)
+        v = v.to(torch.bfloat16)
+
+        if past_key_value is not None:
+            past_k, past_v = past_key_value
+            k = torch.cat([past_k, k], dim=1)
+            v = torch.cat([past_v, v], dim=1)
+
+        if use_cache:
+            new_past_key_value = (k, v)
+
         # Flash Attention 2 — full causal (no window restriction)
         # flash_attn_func expects (B, T, H, D) layout — already correct
         attn_output = flash_attn_func(
-            q.to(torch.bfloat16), k.to(torch.bfloat16), v.to(torch.bfloat16),
+            q.to(torch.bfloat16), k, v,
             causal=True,
         )
 
         # (B, T, n_heads, d_head) -> (B, T, n_heads * d_head)
         attn_output = attn_output.contiguous().view(B, T, -1)
 
-        return self.o_proj(attn_output)
+        out = self.o_proj(attn_output)
+
+        if use_cache:
+            return out, new_past_key_value
+        return out
