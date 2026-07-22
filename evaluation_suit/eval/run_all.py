@@ -232,12 +232,12 @@ def run_task_06(models, dry_run=False):
 
 
 TASK_RUNNERS = {
-    "01": ("01_sentiment", run_task_01),
-    "02": ("02_ner", run_task_02),
-    "03": ("03_nli", run_task_03),
-    "04": ("04_mt", run_task_04),
-    "05": ("05_long_context", run_task_05),
-    "06": ("06_summarization", run_task_06),
+    "01": ("sentiment", run_task_01),
+    "02": ("ner", run_task_02),
+    "03": ("nli", run_task_03),
+    "04": ("mt", run_task_04),
+    "05": ("long_context", run_task_05),
+    "06": ("summarization", run_task_06),
 }
 
 

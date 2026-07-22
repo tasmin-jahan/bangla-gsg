@@ -13,6 +13,7 @@ from pathlib import Path
 from torch import nn
 from torch.utils.checkpoint import checkpoint as grad_checkpoint
 from transformers import PreTrainedModel
+from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutput
 from typing import List
 import math
@@ -315,11 +316,12 @@ class RotaryEmbedding(nn.Module):
         assert d_head % 2 == 0, f"d_head must be even, got {d_head}"
         self.d_head = d_head
         self.max_seq_len = max_seq_len
+        self.base = base
 
         inv_freq = 1.0 / (
             base ** (torch.arange(0, d_head, 2, dtype=torch.float32) / d_head)
         )
-        self.register_buffer("inv_freq", inv_freq)  # (d_head // 2,)
+        self.register_buffer("inv_freq", inv_freq, persistent=True)
 
     def forward(
         self,
@@ -333,10 +335,15 @@ class RotaryEmbedding(nn.Module):
         Returns rotated (q, k) with the same shapes and dtype as inputs.
         """
         dtype = q.dtype
+        device = q.device
+
+        inv_freq = 1.0 / (
+            self.base ** (torch.arange(0, self.d_head, 2, dtype=torch.float32, device=device) / self.d_head)
+        )
 
         # Compute angles in float32 for precision
         pos_f = positions.float().unsqueeze(-1)  # (B, T, 1)
-        freqs = pos_f * self.inv_freq.float()  # (B, T, d_head//2)
+        freqs = pos_f * inv_freq  # (B, T, d_head//2)
 
         # Duplicate for the rotate_half trick
         emb = torch.cat([freqs, freqs], dim=-1)  # (B, T, d_head)
@@ -1110,7 +1117,7 @@ class BanglaGSGModel(nn.Module):
 # RawConfig dataclass and adapts BanglaGSGModel to the PreTrainedModel API.
 
 
-class BanglaGSGForCausalLM(PreTrainedModel):
+class BanglaGSGForCausalLM(PreTrainedModel, GenerationMixin):
     config_class = BanglaGSGConfig
     base_model_prefix = "model"
     _no_split_modules = [
@@ -1168,6 +1175,14 @@ class BanglaGSGForCausalLM(PreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.model.lm_head = new_embeddings
 
+    def prepare_inputs_for_generation(
+        self, input_ids, past_key_values=None, attention_mask=None, **kwargs
+    ):
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -1177,13 +1192,7 @@ class BanglaGSGForCausalLM(PreTrainedModel):
     ):
         """
         Forward pass for standard HF Causal LM tracking.
-
-        Note: KV-caching (.generate()) is unsupported in v1.
         """
-        # BanglaGSG currently does NOT support padded sequences natively due
-        # to GDN logic. We must explicitly fail if a user passes an
-        # attention_mask containing padding (0s) to prevent silent
-        # corruption of attention calculations.
         if attention_mask is not None:
             if not torch.all(attention_mask.bool()):
                 raise NotImplementedError(

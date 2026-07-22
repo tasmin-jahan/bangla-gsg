@@ -23,6 +23,7 @@ from datasets import Dataset, DatasetDict, load_dataset
 
 # Known HF dataset IDs to try (some may be stale or renamed)
 _HF_CANDIDATES = [
+    "khondoker/SentNoB",
     "SentNoB",
     "KhondokerIslam/SentNoB",
     "sepidmnorozy/Bengali_sentiment",
@@ -39,6 +40,13 @@ def _try_load_from_hf() -> Optional[DatasetDict]:
         try:
             ds = load_dataset(candidate)
             print(f"[SentNoB] Loaded from HF: {candidate}")
+            # Normalize column names to 'text' and 'label'
+            for split_name in list(ds.keys()):
+                cols = ds[split_name].column_names
+                if "Data" in cols:
+                    ds[split_name] = ds[split_name].rename_column("Data", "text")
+                if "Label" in cols:
+                    ds[split_name] = ds[split_name].rename_column("Label", "label")
             return ds
         except Exception:
             continue
@@ -176,6 +184,17 @@ def load_sentnob(cache_dir: str = "evaluation_suit/data_cache/sentnob") -> Datas
     if ds is None:
         print("[SentNoB] Not found on HF, falling back to GitHub clone...")
         ds = _load_from_github(cache_dir)
+
+    # Ensure dataset has train, validation, test splits
+    if "test" not in ds:
+        # Split train into train (80%), val (10%), test (10%)
+        split1 = ds["train"].train_test_split(test_size=0.2, seed=42)
+        split2 = split1["test"].train_test_split(test_size=0.5, seed=42)
+        ds = DatasetDict({
+            "train": split1["train"],
+            "validation": split2["train"],
+            "test": split2["test"]
+        })
 
     # Validate 3-class distribution
     for split_name in ds:

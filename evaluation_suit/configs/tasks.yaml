@@ -7,7 +7,7 @@
 
 seeds: [0, 1, 2]
 
-01_sentiment:
+sentiment:
   epochs: 5
   lr: 2.0e-5
   batch_size: 16
@@ -15,7 +15,7 @@ seeds: [0, 1, 2]
   metric: macro_f1
   secondary_metric: accuracy
 
-02_ner:
+ner:
   epochs: 10
   lr: 2.0e-5
   batch_size: 16
@@ -25,7 +25,7 @@ seeds: [0, 1, 2]
     - ancholik
     - wikiann
 
-03_nli:
+nli:
   epochs: 5
   lr: 2.0e-5
   batch_size: 16
@@ -35,7 +35,7 @@ seeds: [0, 1, 2]
     - xnli
     - paraphrase
 
-04_mt:
+mt:
   max_new_tokens: 128
   max_seq_len: 512
   contamination_threshold: 0.02
@@ -48,7 +48,7 @@ seeds: [0, 1, 2]
   excluded_models:
     - banglabert
 
-05_long_context:
+long_context:
   context_lengths: [256, 512, 1024, 1536, 2048]
   needle_depths: [0.1, 0.3, 0.5, 0.7, 0.9]
   samples_per_cell: 20
@@ -56,7 +56,7 @@ seeds: [0, 1, 2]
   excluded_models:
     - banglabert
 
-06_summarization:
+summarization:
   max_new_tokens: 256
   max_src_len: 1024
   metrics:

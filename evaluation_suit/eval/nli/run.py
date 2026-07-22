@@ -66,19 +66,20 @@ _SEPARATOR = " । "
 class NLIDataset(Dataset):
     """Wraps HF NLI dataset with sentence-pair tokenization."""
 
-    def __init__(self, hf_dataset, tokenizer, max_len: int = 256, model_type: str = "causal_lm"):
+    def __init__(self, hf_dataset, tokenizer, max_len: int = 256, model_type: str = "causal_lm", padding: str | bool = "max_length"):
         self.data = hf_dataset
         self.tokenizer = tokenizer
         self.max_len = max_len
         self.model_type = model_type
+        self.padding = padding
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         item = self.data[idx]
-        premise = str(item["premise"])
-        hypothesis = str(item["hypothesis"])
+        premise = item["premise"]
+        hypothesis = item["hypothesis"]
         label = item["label"]
 
         if self.model_type == "masked_lm":
@@ -88,7 +89,7 @@ class NLIDataset(Dataset):
                 text_pair=hypothesis,
                 truncation=True,
                 max_length=self.max_len,
-                padding="max_length",
+                padding=self.padding,
                 return_tensors="pt",
             )
         else:
@@ -99,7 +100,7 @@ class NLIDataset(Dataset):
                 combined,
                 truncation=True,
                 max_length=self.max_len,
-                padding="max_length",
+                padding=self.padding,
                 return_tensors="pt",
             )
 
@@ -176,15 +177,19 @@ def train_and_evaluate(
     # Build head
     head = ClassificationHead(hidden_size, num_classes).to(device)
 
-    # Data loaders
-    train_ds = NLIDataset(dataset["train"], loaded.tokenizer, max_seq_len, loaded.model_type)
-    val_split = "validation" if "validation" in dataset else "test"
-    val_ds = NLIDataset(dataset[val_split], loaded.tokenizer, max_seq_len, loaded.model_type)
-    test_ds = NLIDataset(dataset["test"], loaded.tokenizer, max_seq_len, loaded.model_type)
+    # Handle batch size & padding for causal LMs (unpadded dense batches required)
+    eff_batch_size = 1 if loaded.model_type == "causal_lm" else batch_size
+    padding_strat = False if loaded.model_type == "causal_lm" else "max_length"
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
-    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=2)
+    # Data loaders
+    train_ds = NLIDataset(dataset["train"], loaded.tokenizer, max_seq_len, loaded.model_type, padding=padding_strat)
+    val_split = "validation" if "validation" in dataset else "test"
+    val_ds = NLIDataset(dataset[val_split], loaded.tokenizer, max_seq_len, loaded.model_type, padding=padding_strat)
+    test_ds = NLIDataset(dataset["test"], loaded.tokenizer, max_seq_len, loaded.model_type, padding=padding_strat)
+
+    train_loader = DataLoader(train_ds, batch_size=eff_batch_size, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_ds, batch_size=eff_batch_size, shuffle=False, num_workers=2)
+    test_loader = DataLoader(test_ds, batch_size=eff_batch_size, shuffle=False, num_workers=2)
 
     # Freeze base model
     loaded.model.eval()

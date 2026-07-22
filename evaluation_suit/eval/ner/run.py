@@ -70,6 +70,7 @@ def align_labels_with_tokens(
     ner_tags: List[int],
     tokenizer,
     max_len: int = 256,
+    pad_to_max: bool = True,
 ) -> Tuple[List[int], List[int], List[int]]:
     """
     Align word-level NER tags with subword tokens.
@@ -124,7 +125,7 @@ def align_labels_with_tokens(
 
     # Pad to max_len
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
-    pad_len = max_len - len(all_input_ids)
+    pad_len = (max_len - len(all_input_ids)) if pad_to_max else 0
     attention_mask = [1] * len(all_input_ids) + [0] * pad_len
     aligned_labels = aligned_labels + [-100] * pad_len
     all_input_ids = all_input_ids + [pad_id] * pad_len
@@ -137,10 +138,11 @@ def align_labels_with_tokens(
 class NERDataset(Dataset):
     """Wraps HF NER dataset for PyTorch with subword label alignment."""
 
-    def __init__(self, hf_dataset, tokenizer, max_len: int = 256):
+    def __init__(self, hf_dataset, tokenizer, max_len: int = 256, pad_to_max: bool = True):
         self.data = hf_dataset
         self.tokenizer = tokenizer
         self.max_len = max_len
+        self.pad_to_max = pad_to_max
 
     def __len__(self):
         return len(self.data)
@@ -151,7 +153,7 @@ class NERDataset(Dataset):
         ner_tags = item["ner_tags"]
 
         input_ids, attention_mask, labels = align_labels_with_tokens(
-            tokens, ner_tags, self.tokenizer, self.max_len
+            tokens, ner_tags, self.tokenizer, self.max_len, pad_to_max=self.pad_to_max
         )
 
         return {
@@ -257,15 +259,19 @@ def train_and_evaluate(
     # Build head
     head = TokenClassificationHead(hidden_size, num_labels).to(device)
 
-    # Data loaders
-    train_ds = NERDataset(dataset["train"], loaded.tokenizer, max_len=max_seq_len)
-    val_split = "validation" if "validation" in dataset else "test"
-    val_ds = NERDataset(dataset[val_split], loaded.tokenizer, max_len=max_seq_len)
-    test_ds = NERDataset(dataset["test"], loaded.tokenizer, max_len=max_seq_len)
+    # Handle batch size & padding for causal LMs (unpadded dense batches required)
+    eff_batch_size = 1 if loaded.model_type == "causal_lm" else batch_size
+    pad_to_max = False if loaded.model_type == "causal_lm" else True
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
-    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=2)
+    # Data loaders
+    train_ds = NERDataset(dataset["train"], loaded.tokenizer, max_len=max_seq_len, pad_to_max=pad_to_max)
+    val_split = "validation" if "validation" in dataset else "test"
+    val_ds = NERDataset(dataset[val_split], loaded.tokenizer, max_len=max_seq_len, pad_to_max=pad_to_max)
+    test_ds = NERDataset(dataset["test"], loaded.tokenizer, max_len=max_seq_len, pad_to_max=pad_to_max)
+
+    train_loader = DataLoader(train_ds, batch_size=eff_batch_size, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_ds, batch_size=eff_batch_size, shuffle=False, num_workers=2)
+    test_loader = DataLoader(test_ds, batch_size=eff_batch_size, shuffle=False, num_workers=2)
 
     # Freeze base model
     loaded.model.eval()

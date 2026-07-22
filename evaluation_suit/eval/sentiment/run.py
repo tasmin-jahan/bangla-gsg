@@ -85,10 +85,11 @@ class ClassificationHead(nn.Module):
 class SentimentDataset(Dataset):
     """Wraps HF dataset for PyTorch DataLoader with tokenization."""
 
-    def __init__(self, hf_dataset, tokenizer, max_len: int = 256):
+    def __init__(self, hf_dataset, tokenizer, max_len: int = 256, padding: str | bool = "max_length"):
         self.data = hf_dataset
         self.tokenizer = tokenizer
         self.max_len = max_len
+        self.padding = padding
 
     def __len__(self):
         return len(self.data)
@@ -102,7 +103,7 @@ class SentimentDataset(Dataset):
             text,
             truncation=True,
             max_length=self.max_len,
-            padding="max_length",
+            padding=self.padding,
             return_tensors="pt",
         )
 
@@ -194,18 +195,23 @@ def train_and_evaluate(
     # Build classification head
     head = ClassificationHead(hidden_size=hidden_size, num_classes=3).to(device)
 
+    # Handle batch size & padding for causal LMs (unpadded dense batches required)
+    eff_batch_size = 1 if loaded.model_type == "causal_lm" else batch_size
+    padding_strat = False if loaded.model_type == "causal_lm" else "max_length"
+
     # Build data loaders
-    train_ds = SentimentDataset(dataset["train"], loaded.tokenizer, max_len=max_seq_len)
+    train_ds = SentimentDataset(dataset["train"], loaded.tokenizer, max_len=max_seq_len, padding=padding_strat)
     val_ds = SentimentDataset(
         dataset.get("validation", dataset.get("test")),
         loaded.tokenizer,
         max_len=max_seq_len,
+        padding=padding_strat,
     )
-    test_ds = SentimentDataset(dataset["test"], loaded.tokenizer, max_len=max_seq_len)
+    test_ds = SentimentDataset(dataset["test"], loaded.tokenizer, max_len=max_seq_len, padding=padding_strat)
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
-    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=2)
+    train_loader = DataLoader(train_ds, batch_size=eff_batch_size, shuffle=True, num_workers=2)
+    val_loader = DataLoader(val_ds, batch_size=eff_batch_size, shuffle=False, num_workers=2)
+    test_loader = DataLoader(test_ds, batch_size=eff_batch_size, shuffle=False, num_workers=2)
 
     # Optimizer — only train the classification head, freeze base model
     # (This is the standard approach for comparing base model representations)
