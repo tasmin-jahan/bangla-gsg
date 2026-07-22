@@ -1,0 +1,28 @@
+# ============================================================
+# Eval Suite — Additional Dependencies
+# Install on top of the base BanglaGamba environment.
+#
+#   pip install -r evaluation_suit/requirements.txt
+# ============================================================
+
+# Evaluation metrics
+scikit-learn>=1.3.0
+seqeval>=1.2.2
+sacrebleu>=2.3.0
+evaluate>=0.4.0
+bert-score>=0.3.13
+rouge-score>=0.1.2
+
+# Dataset loading
+datasets>=3.0.0
+transformers>=4.40.0
+huggingface-hub>=0.20.0
+
+# Bangla normalizer (required for GSG model)
+bnunicodenormalizer>=0.1.0
+
+# Utilities
+pyyaml>=6.0
+tqdm>=4.60.0
+numpy>=1.24.0
+torch>=2.1.0

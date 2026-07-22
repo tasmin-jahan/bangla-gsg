@@ -1,0 +1,30 @@
+# ============================================================
+# Eval Suite — Model Registry Config
+# Maps model keys to HF repos + metadata for load_model()
+# ============================================================
+
+gamba:
+  hf_repo: ahmed-farhanur-rashid/bangla-gamba
+  display_name: BanglaGamba
+  model_type: causal_lm
+  trust_remote_code: true
+  claimed_params_m: 199
+  seq_len: 2048
+
+gsg:
+  hf_repo: tasmin-jahan/bangla-gsg
+  display_name: BanglaGSG
+  model_type: causal_lm
+  trust_remote_code: true
+  claimed_params_m: 186
+  seq_len: 2048
+  requires:
+    - bnunicodenormalizer
+
+banglabert:
+  hf_repo: csebuetnlp/banglabert
+  display_name: BanglaBERT-base
+  model_type: masked_lm
+  trust_remote_code: false
+  claimed_params_m: 110
+  seq_len: 512

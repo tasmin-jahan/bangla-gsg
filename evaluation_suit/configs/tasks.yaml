@@ -1,0 +1,66 @@
+# ============================================================
+# Eval Suite — Task Hyperparameters
+# Shared across all models for fair comparison.
+# Do NOT tune per-model — if a model fails to converge,
+# note it rather than quietly tuning.
+# ============================================================
+
+seeds: [0, 1, 2]
+
+01_sentiment:
+  epochs: 5
+  lr: 2.0e-5
+  batch_size: 16
+  max_seq_len: 256
+  metric: macro_f1
+  secondary_metric: accuracy
+
+02_ner:
+  epochs: 10
+  lr: 2.0e-5
+  batch_size: 16
+  max_seq_len: 256
+  metric: entity_f1
+  datasets:
+    - ancholik
+    - wikiann
+
+03_nli:
+  epochs: 5
+  lr: 2.0e-5
+  batch_size: 16
+  max_seq_len: 256
+  metric: accuracy
+  datasets:
+    - xnli
+    - paraphrase
+
+04_mt:
+  max_new_tokens: 128
+  max_seq_len: 512
+  contamination_threshold: 0.02
+  directions:
+    - bn_to_en
+    - en_to_bn
+  metrics:
+    - bleu
+    - chrf
+  excluded_models:
+    - banglabert
+
+05_long_context:
+  context_lengths: [256, 512, 1024, 1536, 2048]
+  needle_depths: [0.1, 0.3, 0.5, 0.7, 0.9]
+  samples_per_cell: 20
+  max_new_tokens: 64
+  excluded_models:
+    - banglabert
+
+06_summarization:
+  max_new_tokens: 256
+  max_src_len: 1024
+  metrics:
+    - rouge_l
+    - bertscore
+  excluded_models:
+    - banglabert
