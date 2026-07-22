@@ -2,7 +2,9 @@
 
 **GDN:SWA:GQA 1:1:1 Interleaved Hybrid Foundation Model for Bangla**
 
-A heterogeneous-architecture language model combining three complementary mixer types in a repeating 1:1:1 interleaved pattern:
+A heterogeneous-architecture language model combining three complementary mixer types in a repeating 1:1:1 interleaved pattern.
+
+Sibling Model: [Bangla-Gamba](https://github.com/ahmed-farhanur-rashid/bangla-gamba)
 
 | Layer Type | Full Name | Mechanism | Complexity | Role |
 |:---:|---|---|:---:|---|
