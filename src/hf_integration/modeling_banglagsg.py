@@ -1004,7 +1004,7 @@ class BanglaGSGModel(nn.Module):
 
         # Final norm + LM head
         x = self.final_norm(x)
-        if kwargs.get("return_hidden", False):
+        if return_hidden or kwargs.get("return_hidden", False):
             if use_cache:
                 past_key_values = {"gdn": gdn_cache, "swa_gqa": swa_gqa_cache}
                 return x, past_key_values
