@@ -40,6 +40,7 @@ ENV/
 .spyproject
 .ropeproject
 no_upload/
+context.md
 
 # ── OS Artifacts ─────────────────────────────────────────────
 .DS_Store
