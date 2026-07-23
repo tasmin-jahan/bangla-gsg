@@ -35,31 +35,31 @@ ALL_MODELS = ["gamba", "gsg", "banglabert"]
 GENERATIVE_MODELS = ["gamba", "gsg"]
 
 
-def run_task_01(models, seeds, dry_run=False):
+def run_task_01(models, seeds, dry_run=False, save_checkpoints=False):
     """01_sentiment — SentNoB"""
     from evaluation_suit.eval.sentiment.run import train_and_evaluate
 
     results = []
     for model in models:
         for seed in seeds:
-            desc = f"01_sentiment/{model}/seed={seed}"
+            desc = f"sentiment/{model}/seed={seed}"
             if dry_run:
                 print(f"  [DRY RUN] Would run: {desc}")
                 continue
             print(f"\n{'='*60}\n  Running: {desc}\n{'='*60}")
             try:
-                r = train_and_evaluate(model_key=model, seed=seed)
-                results.append({"task": "01_sentiment", "model": model, "seed": seed,
+                r = train_and_evaluate(model_key=model, seed=seed, save_checkpoint=save_checkpoints)
+                results.append({"task": "sentiment", "model": model, "seed": seed,
                                 "status": "completed" if r else "skipped"})
             except Exception as e:
                 print(f"  ✗ FAILED: {e}")
                 traceback.print_exc()
-                results.append({"task": "01_sentiment", "model": model, "seed": seed,
+                results.append({"task": "sentiment", "model": model, "seed": seed,
                                 "status": "failed", "error": str(e)})
     return results
 
 
-def run_task_02(models, seeds, dry_run=False):
+def run_task_02(models, seeds, dry_run=False, save_checkpoints=False):
     """02_ner — ANCHOLIK + WikiAnn"""
     from evaluation_suit.eval.ner.run import train_and_evaluate
 
@@ -67,24 +67,24 @@ def run_task_02(models, seeds, dry_run=False):
     for dataset in ["ancholik", "wikiann"]:
         for model in models:
             for seed in seeds:
-                desc = f"02_ner/{model}/{dataset}/seed={seed}"
+                desc = f"ner/{model}/{dataset}/seed={seed}"
                 if dry_run:
                     print(f"  [DRY RUN] Would run: {desc}")
                     continue
                 print(f"\n{'='*60}\n  Running: {desc}\n{'='*60}")
                 try:
-                    r = train_and_evaluate(model_key=model, dataset_name=dataset, seed=seed)
-                    results.append({"task": "02_ner", "model": model, "dataset": dataset,
+                    r = train_and_evaluate(model_key=model, dataset_name=dataset, seed=seed, save_checkpoint=save_checkpoints)
+                    results.append({"task": "ner", "model": model, "dataset": dataset,
                                     "seed": seed, "status": "completed" if r else "skipped"})
                 except Exception as e:
                     print(f"  ✗ FAILED: {e}")
                     traceback.print_exc()
-                    results.append({"task": "02_ner", "model": model, "dataset": dataset,
+                    results.append({"task": "ner", "model": model, "dataset": dataset,
                                     "seed": seed, "status": "failed", "error": str(e)})
     return results
 
 
-def run_task_03(models, seeds, dry_run=False):
+def run_task_03(models, seeds, dry_run=False, save_checkpoints=False):
     """03_nli — XNLI + BanglaParaphrase"""
     from evaluation_suit.eval.nli.run import train_and_evaluate
 
@@ -92,19 +92,19 @@ def run_task_03(models, seeds, dry_run=False):
     for dataset in ["xnli", "paraphrase"]:
         for model in models:
             for seed in seeds:
-                desc = f"03_nli/{model}/{dataset}/seed={seed}"
+                desc = f"nli/{model}/{dataset}/seed={seed}"
                 if dry_run:
                     print(f"  [DRY RUN] Would run: {desc}")
                     continue
                 print(f"\n{'='*60}\n  Running: {desc}\n{'='*60}")
                 try:
-                    r = train_and_evaluate(model_key=model, dataset_name=dataset, seed=seed)
-                    results.append({"task": "03_nli", "model": model, "dataset": dataset,
+                    r = train_and_evaluate(model_key=model, dataset_name=dataset, seed=seed, save_checkpoint=save_checkpoints)
+                    results.append({"task": "nli", "model": model, "dataset": dataset,
                                     "seed": seed, "status": "completed" if r else "skipped"})
                 except Exception as e:
                     print(f"  ✗ FAILED: {e}")
                     traceback.print_exc()
-                    results.append({"task": "03_nli", "model": model, "dataset": dataset,
+                    results.append({"task": "nli", "model": model, "dataset": dataset,
                                     "seed": seed, "status": "failed", "error": str(e)})
     return results
 
@@ -250,6 +250,8 @@ def main():
     parser.add_argument("--seeds", nargs="+", type=int, default=SEEDS)
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would run without running")
+    parser.add_argument("--save-checkpoints", action="store_true",
+                        help="Save fine-tuned head weights to disk for HF upload")
     args = parser.parse_args()
 
     start_time = time.time()
@@ -259,6 +261,7 @@ def main():
     print(f"  Tasks: {args.tasks}")
     print(f"  Seeds: {args.seeds}")
     print(f"  Dry run: {args.dry_run}")
+    print(f"  Save Checkpoints: {args.save_checkpoints}")
     print(f"{'='*60}\n")
 
     all_results = []
@@ -269,9 +272,9 @@ def main():
         print(f"  TASK: {task_name}")
         print(f"{'#'*60}")
 
-        # Tasks 01-03 take models + seeds; 04-06 take models only
+        # Tasks 01-03 take models + seeds + save_checkpoints; 04-06 take models only
         if task_key in ("01", "02", "03"):
-            results = runner(args.models, args.seeds, args.dry_run)
+            results = runner(args.models, args.seeds, args.dry_run, args.save_checkpoints)
         else:
             results = runner(args.models, args.dry_run)
 

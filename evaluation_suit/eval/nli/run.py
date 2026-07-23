@@ -142,7 +142,8 @@ def train_and_evaluate(
     lr: float = 2e-5,
     batch_size: int = 16,
     max_seq_len: int = 256,
-    results_dir: str = "evaluation_suit/results/03_nli",
+    results_dir: str = "evaluation_suit/results/nli",
+    save_checkpoint: bool = False,
 ) -> dict:
     """Fine-tune and evaluate NLI on a single (model, dataset, seed) combo."""
     set_seed(seed)
@@ -291,6 +292,23 @@ def train_and_evaluate(
     }
     append_result(results_path, result)
     print(f"  Result appended to {results_path}")
+
+    # Save fine-tuned head checkpoint if requested
+    if save_checkpoint and best_head_state is not None:
+        ckpt_dir = Path(f"evaluation_suit/checkpoints/nli/{model_key}_{dataset_name}_seed{seed}")
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(best_head_state, ckpt_dir / "classifier_head.pt")
+        from evaluation_suit.eval.common.io_utils import write_json
+        write_json(ckpt_dir / "checkpoint_info.json", {
+            "model": model_key,
+            "task": "nli",
+            "dataset": dataset_name,
+            "seed": seed,
+            "test_accuracy": round(test_acc, 4),
+            "test_macro_f1": round(test_f1, 4),
+            "num_classes": num_classes,
+        })
+        print(f"  ✓ Fine-tuned head checkpoint saved to {ckpt_dir}")
 
     del loaded, head
     torch.cuda.empty_cache()

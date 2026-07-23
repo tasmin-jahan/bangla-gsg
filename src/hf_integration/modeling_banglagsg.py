@@ -943,6 +943,8 @@ class BanglaGSGModel(nn.Module):
         past_key_values=None,
         use_cache: bool = False,
         position_offset: int = 0,
+        return_hidden: bool = False,
+        **kwargs,
     ):
         """
         Forward pass.
@@ -1008,6 +1010,12 @@ class BanglaGSGModel(nn.Module):
 
         # Final norm + LM head
         x = self.final_norm(x)
+        if kwargs.get("return_hidden", False):
+            if use_cache:
+                past_key_values = {"gdn": gdn_cache, "swa_gqa": swa_gqa_cache}
+                return x, past_key_values
+            return x
+
         logits = self.lm_head(x)
 
         if use_cache:
@@ -1202,7 +1210,14 @@ class BanglaGSGForCausalLM(PreTrainedModel, GenerationMixin):
                     "without padding."
                 )
 
+        if kwargs.get("return_hidden", False):
+            return self.model(input_ids, return_hidden=True)
+
         logits = self.model(input_ids)
+
+        hidden_states = None
+        if kwargs.get("output_hidden_states", False):
+            hidden_states = (self.model(input_ids, return_hidden=True),)
 
         loss = None
         if labels is not None:
@@ -1219,4 +1234,5 @@ class BanglaGSGForCausalLM(PreTrainedModel, GenerationMixin):
         return CausalLMOutput(
             loss=loss,
             logits=logits,
+            hidden_states=hidden_states,
         )
