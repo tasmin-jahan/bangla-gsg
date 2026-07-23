@@ -493,9 +493,6 @@ class GQAttention(nn.Module):
         # Apply RoPE to Q and K only
         q, k = rope(q, k, positions)
 
-        k = k.to(torch.bfloat16)
-        v = v.to(torch.bfloat16)
-
         if past_key_value is not None:
             past_k, past_v = past_key_value
             k = torch.cat([past_k, k], dim=1)
@@ -506,13 +503,13 @@ class GQAttention(nn.Module):
 
         # Flash Attention 2 — full causal (no window restriction)
         if flash_attn_func is not None:
-            # flash_attn_func expects (B, T, H, D) layout
+            # flash_attn_func expects (B, T, H, D) layout in float16/bfloat16
             attn_output = flash_attn_func(
                 q.to(torch.bfloat16),
-                k,
-                v,
+                k.to(torch.bfloat16),
+                v.to(torch.bfloat16),
                 causal=True,
-            )
+            ).to(q.dtype)
         else:
             # PyTorch SDPA fallback
             q = q.transpose(1, 2)  # (B, H, T, d_head)
@@ -618,9 +615,6 @@ class SlidingWindowAttention(nn.Module):
         # Apply RoPE to Q and K only
         q, k = rope(q, k, positions)
 
-        k = k.to(torch.bfloat16)
-        v = v.to(torch.bfloat16)
-
         if past_key_value is not None:
             past_k, past_v = past_key_value
             k = torch.cat(
@@ -644,14 +638,14 @@ class SlidingWindowAttention(nn.Module):
             # flash_attn_func expects (B, T, H, D) layout
             attn_output = flash_attn_func(
                 q.to(torch.bfloat16),
-                k,
-                v,
+                k.to(torch.bfloat16),
+                v.to(torch.bfloat16),
                 causal=True,
                 window_size=(
                     self.window_size,
                     0,
                 ),  # (left_window, right_window=0 for causal)
-            )
+            ).to(q.dtype)
         else:
             # PyTorch SDPA fallback
             q = q.transpose(1, 2)
